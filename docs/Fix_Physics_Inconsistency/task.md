@@ -20,3 +20,9 @@
     - [x] Group settings (Server, Target, Physics).
     - [x] Add `serverHeight` slider (50-250cm).
 - [x] Update `ServeScene.tsx` visualization for server marker. <!-- id: 9 -->
+
+## Phase 3: Intuitive Trajectory Controls
+- [x] Replace `launchAngle` with `trajectoryPeakHeight` and `peakPosition` in `ServeConfig`. <!-- id: 10 -->
+- [x] Update `PhysicsEngine.ts` to calculate launch angle from peak height/position. <!-- id: 11 -->
+- [x] Update `ControlPanel.tsx` to show new sliders. <!-- id: 12 -->
+- [x] Update bidirectional sync logic in `ControlPanel.tsx`. <!-- id: 13 -->

@@ -2,7 +2,8 @@ import { Vector3 } from 'three';
 
 export interface ServeConfig {
   serveSpeed: number;             // km/h
-  launchAngle: number;            // degrees (vertical)
+  trajectoryPeakHeight: number;   // m (maximum height of trajectory)
+  peakPosition: number;           // m (Z position where peak occurs, relative to net at Z=0)
   targetX: number;                // m (x coordinate)
   targetZ: number;                // m (z coordinate)
   serverHeight: number;           // m (height of serve impact)

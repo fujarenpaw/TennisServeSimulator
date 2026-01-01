@@ -24,13 +24,14 @@ const ServeScene: React.FC = () => {
 
     const [config, setConfig] = useState<ServeConfig>({
         serveSpeed: 180,
-        launchAngle: -5,
+        trajectoryPeakHeight: 3.0,  // 3m peak height
+        peakPosition: 2.0,           // Peak at 2m past net
         targetX: 0,
         targetZ: 4.0,
-        serverHeight: 1.0,     // Default 100cm (UNDER)
+        serverHeight: 1.0,           // Default 100cm (UNDER)
         bounceVelocityRetention: 0.7,
         reactionDelay: 0.3,
-        serverPositionX: 0,
+        serverPositionX: 1.5,
         showDimensions: false
     });
 
@@ -115,7 +116,8 @@ const ServeScene: React.FC = () => {
                     targetX: x,
                     targetZ: z,
                     serveSpeed: optimized.speed,
-                    launchAngle: optimized.angle
+                    trajectoryPeakHeight: optimized.trajectoryPeakHeight,
+                    peakPosition: optimized.peakPosition
                 }));
             }
         };

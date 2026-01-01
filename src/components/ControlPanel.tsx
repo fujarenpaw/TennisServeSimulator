@@ -33,10 +33,10 @@ export const ControlPanel: React.FC<Props> = ({ config, onConfigChange, onPlayAn
             updateConfig({
                 [key]: value,
                 serveSpeed: optimized.speed,
-                launchAngle: optimized.angle
+                trajectoryPeakHeight: optimized.trajectoryPeakHeight,
+                peakPosition: optimized.peakPosition
             });
-        }
-        else if (key === 'serveSpeed' || key === 'launchAngle' || key === 'serverPositionX') {
+        } else if (key === 'serveSpeed' || key === 'trajectoryPeakHeight' || key === 'peakPosition' || key === 'serverPositionX') {
             // Physics changed -> Update TargetX/Z
             // We need to recalculate where it lands.
             const trajectory = PhysicsEngine.calculateTrajectory(newConfig);
@@ -139,20 +139,41 @@ export const ControlPanel: React.FC<Props> = ({ config, onConfigChange, onPlayAn
                         />
                     </div>
 
-                    {/* Launch Angle */}
-                    <div>
+                    {/* Trajectory Peak Height */}
+                    <div style={{ marginBottom: '10px' }}>
                         <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold', fontSize: '14px' }}>
-                            打ち出し角度: {config.launchAngle.toFixed(1)}°
+                            軌道の最高点の高さ: {config.trajectoryPeakHeight.toFixed(2)} m
                         </label>
                         <input
                             type="range"
-                            min="-15"
-                            max="40"
-                            step="0.5"
-                            value={config.launchAngle}
-                            onChange={(e) => handleChange('launchAngle', Number(e.target.value))}
+                            min="0.5"
+                            max="10"
+                            step="0.1"
+                            value={config.trajectoryPeakHeight}
+                            onChange={(e) => handleChange('trajectoryPeakHeight', Number(e.target.value))}
                             style={{ width: '100%' }}
                         />
+                    </div>
+
+                    {/* Peak Position */}
+                    <div>
+                        <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold', fontSize: '14px' }}>
+                            最高点の位置 (ネット基準): {config.peakPosition.toFixed(2)} m
+                        </label>
+                        <input
+                            type="range"
+                            min={-6}
+                            max={12}
+                            step="0.1"
+                            value={config.peakPosition}
+                            onChange={(e) => handleChange('peakPosition', Number(e.target.value))}
+                            style={{ width: '100%' }}
+                        />
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', color: '#666' }}>
+                            <span>サーバー側</span>
+                            <span>ネット</span>
+                            <span>相手コート</span>
+                        </div>
                     </div>
                 </fieldset>
 

@@ -75,6 +75,35 @@
   - 初期値の設定。
   - サーバーマーカー (`serverMarker`) のY座標を `serverHeight` に同期。
 
+## Phase 3: Intuitive Trajectory Controls (今回追加)
+
+### 目的
+「打ち出し角度」は物理的には正確ですが、直感的ではありません。以下の2つのパラメータに置き換えます：
+- **軌道の最高点の高さ** (`trajectoryPeakHeight`): ボールが到達する最大の高さ（メートル）
+- **最高点の位置** (`peakPosition`): ネット（Z=0）を基準に、どこで最高点に達するか（メートル、正の値は相手コート側）
+
+### 変更内容
+
+#### `src/types/index.ts`
+- `ServeConfig` から `launchAngle` を削除
+- `trajectoryPeakHeight` (number) を追加
+- `peakPosition` (number) を追加
+
+#### `src/core/PhysicsEngine.ts`
+- 新しいヘルパー関数 `calculateLaunchAngleFromPeak(startPos, peakHeight, peakPosition, speed)` を追加
+  - 最高点の条件から逆算して打ち出し角度を計算
+- `calculateTrajectory` で `launchAngle` の代わりに上記関数を使用
+- `optimizeServe` の戻り値を `{ speed, trajectoryPeakHeight, peakPosition }` に変更
+
+#### `src/components/ControlPanel.tsx`
+- `Launch Angle` スライダーを削除
+- `Trajectory Peak Height` スライダーを追加（範囲: 0.5m - 10m）
+- `Peak Position` スライダーを追加（範囲: -6m (サーバー側) ～ +12m (相手コート側)）
+- 双方向同期ロジックを更新
+
+#### `src/features/serve/ServeScene.tsx`
+- 初期値を `launchAngle` から `trajectoryPeakHeight`, `peakPosition` に変更
+
 
 ## 検証計画
 

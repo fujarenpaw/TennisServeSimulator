@@ -8,28 +8,90 @@ export class PhysicsEngine {
     private static readonly MIN_CLEARANCE = 0.15; // Margin above net in meters
 
     /**
-     * Calculates the full trajectory based on speed and vertical launch angle.
-     * Also updates the config.targetX/Z to match the actual landing spot if needed (though we return data).
+     * Calculate launch angle from peak height and peak position.
+     * Uses kinematic equations: at peak, vy = 0.
+     * Peak occurs at time t_peak = vy0 / g
+     * Peak height: h_peak = h0 + vy0^2 / (2*g)
+     * Peak position (horizontal): x_peak = vx * t_peak
+     */
+    private static calculateLaunchAngleFromPeak(
+        startHeight: number,
+        peakHeight: number,
+        peakPosition: number,
+        horizontalDistance: number,
+        speed: number
+    ): number {
+        // peakHeight = startHeight + vy0^2 / (2*g)
+        // => vy0^2 = 2*g*(peakHeight - startHeight)
+        const deltaH = peakHeight - startHeight;
+        if (deltaH < 0) {
+            // Peak is below start, use downward trajectory
+            return -10; // Default downward angle
+        }
+
+        const vy0Squared = 2 * this.GRAVITY * deltaH;
+        const vy0 = Math.sqrt(vy0Squared);
+
+        // t_peak = vy0 / g
+        const tPeak = vy0 / this.GRAVITY;
+
+        // At peak position: peakPosition = vx * tPeak
+        // => vx = peakPosition / tPeak
+        const vx = peakPosition / tPeak;
+
+        // speed^2 = vx^2 + vy0^2
+        // Check if this is achievable with given speed
+        const requiredSpeedSquared = vx * vx + vy0Squared;
+        const requiredSpeed = Math.sqrt(requiredSpeedSquared);
+        const speedMs = speed / 3.6;
+
+        if (requiredSpeed > speedMs * 1.1) {
+            // Cannot achieve this peak with current speed, adjust
+            // Use the angle that gives maximum range
+            const ratio = vy0 / vx;
+            return Math.atan(ratio) * (180 / Math.PI);
+        }
+
+        // Calculate angle: tan(angle) = vy0 / vh
+        // where vh is the horizontal component
+        // speed^2 = vh^2 + vy0^2 => vh = sqrt(speed^2 - vy0^2)
+        const vhSquared = speedMs * speedMs - vy0Squared;
+        if (vhSquared < 0) {
+            // Not enough speed, use what we can
+            return Math.atan(vy0 / 1.0) * (180 / Math.PI);
+        }
+        const vh = Math.sqrt(vhSquared);
+        const angleRad = Math.atan(vy0 / vh);
+        return angleRad * (180 / Math.PI);
+    }
+
+    /**
+     * Calculates the full trajectory based on peak height and peak position.
      */
     static calculateTrajectory(config: ServeConfig): TrajectoryData {
-        const startPos = new Vector3(config.serverPositionX, config.serverHeight, -COURT_CONSTANTS.length / 2); // Release height from config
+        const startPos = new Vector3(config.serverPositionX, config.serverHeight, -COURT_CONSTANTS.length / 2);
 
-        // Calculate velocity vector
-        const speedMs = config.serveSpeed / 3.6;
-        const vAngleRad = (config.launchAngle * Math.PI) / 180;
-
-        // Horizontal direction towards targetX/Z in config
-        // Note: We use the existing target in config to determine the horizontal "Aim". 
-        // If the resulting physics lands elsewhere (due to speed/angle change), we still aim AT the target direction initially.
-        // Wait, if we change Speed, we shouldn't change the "Aim Direction".
-        // The bearing is determined by (TargetX, TargetZ) - StartPos.
+        // Calculate horizontal distance and direction to target
         const aimTargetPos = new Vector3(config.targetX, 0, config.targetZ);
         const direction = new Vector3().subVectors(aimTargetPos, startPos);
         direction.y = 0;
+        const horizontalDistance = direction.length();
         direction.normalize();
 
+        // Calculate launch angle from peak parameters
+        const launchAngle = this.calculateLaunchAngleFromPeak(
+            config.serverHeight,
+            config.trajectoryPeakHeight,
+            config.peakPosition - startPos.z, // peakPosition is relative to net (Z=0), adjust for start position
+            horizontalDistance,
+            config.serveSpeed
+        );
+
+        const speedMs = config.serveSpeed / 3.6;
+        const vAngleRad = (launchAngle * Math.PI) / 180;
+
         const vy = speedMs * Math.sin(vAngleRad);
-        const vh = speedMs * Math.cos(vAngleRad); // Horizontal speed
+        const vh = speedMs * Math.cos(vAngleRad);
 
         const velocity = direction.clone().multiplyScalar(vh);
         velocity.y = vy;
@@ -154,10 +216,10 @@ export class PhysicsEngine {
     }
 
     /**
-     * Finds the optimal Speed and Launch Angle to hit the target (x, z) 
+     * Finds the optimal Speed and trajectory parameters to hit the target (x, z) 
      * with the minimum flight time (max speed) while clearing the net.
      */
-    static optimizeServe(targetX: number, targetZ: number, serverX: number, serverHeight: number): { speed: number, angle: number } {
+    static optimizeServe(targetX: number, targetZ: number, serverX: number, serverHeight: number): { speed: number, trajectoryPeakHeight: number, peakPosition: number } {
         const startPos = new Vector3(serverX, serverHeight, -COURT_CONSTANTS.length / 2);
         const targetPos = new Vector3(targetX, 0, targetZ);
 
@@ -167,55 +229,50 @@ export class PhysicsEngine {
         const range = Math.sqrt(dx * dx + dz * dz);
 
         // Net position (Z=0)
-        // We need to pass Z=0 with y > netHeight
-        // Distance to net from start
         const distToNet = Math.abs(0 - startPos.z);
-        const fractionToNet = distToNet / Math.abs(dz); // Fraction of horizontal path
-        // Range distance at net
+        const fractionToNet = distToNet / Math.abs(dz);
         const rangeAtNet = range * fractionToNet;
 
-        // Equation for projectile motion y(x) without drag (y0 = release height, x = distance)
-        // y(x) = y0 + x * tan(theta) - (g * x^2) / (2 * v^2 * cos^2(theta))
-        // We want y(range) = 0.
-        // 0 = y0 + R * tan(theta) - (g * R^2) / (2 * v^2 * cos^2(theta))
-
-        // We want to maximize v. 
-        // We iterate v downwards from Max (200km/h = 55.5 m/s)
-        const maxSpeed = 220 / 3.6; // ~61 m/s
+        const maxSpeed = 220 / 3.6;
         const minSpeed = 50 / 3.6;
-        const stepSpeed = 1.0; // 1 m/s decrement
+        const stepSpeed = 1.0;
 
         for (let v = maxSpeed; v >= minSpeed; v -= stepSpeed) {
-            // For a given v, find theta that hits Range R.
-            // R = (v^2 * sin(2theta)) / g ... only for ground-to-ground.
-            // For y0 -> 0:
-            // Range equation: R = (v * cos(theta)) / g * (v * sin(theta) + sqrt( (v*sin(theta))^2 + 2*g*y0 ) )
-            // This is hard to invert for theta.
-
-            // Search theta? 
-            // Range of reasonable serves: -10 deg to +10 deg?
-            // Actually usually negative (downwards) for tall players/fast serves.
-            // Let's iterate theta from -15 to +20 degrees.
-            // Or binary search theta for exact distance?
-            // "Drive" serve usually implies the lowest valid trajectory.
-
             const bestTheta = this.findLaunchAngleForDistance(v, range, startPos.y);
-
             if (bestTheta !== null) {
-                // Check Net Clearance
                 const heightAtNet = this.calculateHeightAtDistance(v, bestTheta, rangeAtNet, startPos.y);
                 if (heightAtNet > COURT_CONSTANTS.netHeight + this.MIN_CLEARANCE) {
-                    // Current v is the fastest possible that hits target and clears net.
+                    // Calculate peak height and position from this angle
+                    const vy0 = v * Math.sin(bestTheta);
+                    const vx = v * Math.cos(bestTheta);
+
+                    // Peak height: h_peak = h0 + vy0^2 / (2*g)
+                    const peakHeight = startPos.y + (vy0 * vy0) / (2 * this.GRAVITY);
+
+                    // Time to peak: t_peak = vy0 / g
+                    const tPeak = vy0 / this.GRAVITY;
+
+                    // Distance traveled to peak (horizontal)
+                    const distToPeak = vx * tPeak;
+
+                    // Peak position in Z coordinates (relative to net at Z=0)
+                    const peakPosZ = startPos.z + (dz / range) * distToPeak;
+
                     return {
                         speed: v * 3.6, // Convert back to km/h
-                        angle: bestTheta * (180 / Math.PI)
+                        trajectoryPeakHeight: peakHeight,
+                        peakPosition: peakPosZ
                     };
                 }
             }
         }
 
         // If no fast solution, return a safe lob
-        return { speed: 80, angle: 15 };
+        return {
+            speed: 80,
+            trajectoryPeakHeight: 5.0,
+            peakPosition: 3.0
+        };
     }
 
     private static findLaunchAngleForDistance(v: number, targetR: number, y0: number): number | null {
