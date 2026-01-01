@@ -55,7 +55,7 @@ const ServeScene: React.FC = () => {
 
     // Calculation & Updates
     useEffect(() => {
-        if (!sceneControllerRef.current || !trajectoryVisualizerRef.current || !ballVisualizerRef.current) return;
+        if (!sceneControllerRef.current || !trajectoryVisualizerRef.current || !ballVisualizerRef.current || !courtVisualizerRef.current) return;
 
         const trajectoryData = PhysicsEngine.calculateTrajectory(config);
         const analysis = PhysicsEngine.calculateReceiverAnalysis(trajectoryData, config);
@@ -70,7 +70,7 @@ const ServeScene: React.FC = () => {
         const targetPos = new Vector3(analysis.receiverTarget.x, 0.2, analysis.receiverTarget.z);
 
         trajectoryVisualizerRef.current.updateMarkers(serverPos, receiverPos, targetPos);
-        trajectoryVisualizerRef.current.updateDimensions(config.showDimensions, sceneControllerRef.current.scene, COURT_CONSTANTS);
+        courtVisualizerRef.current.updateDimensions(config.showDimensions);
 
         // Initial Ball Position
         if (!isAnimating) {

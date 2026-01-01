@@ -81,7 +81,7 @@ export const ControlPanel: React.FC<Props> = ({ config, onConfigChange, onPlayAn
                     </label>
                     <input
                         type="range"
-                        min="0.5"
+                        min="0.0"
                         max="5.0"
                         step="0.1"
                         value={config.trajectoryHeight}

@@ -66,7 +66,7 @@ export class TrajectoryVisualizer {
             this.dimensionsGroup!.add(line);
 
             const arrowGeometry = new THREE.ConeGeometry(0.1, 0.3, 8);
-            const arrowMaterial = new THREE.MeshBasicMaterial({ color: 0xffff00 });
+            const arrowMaterial = new THREE.MeshBasicMaterial({ color: 0x98fb98 });
             const arrow1 = new THREE.Mesh(arrowGeometry, arrowMaterial);
             arrow1.position.copy(start);
             arrow1.position.y += 0.5;

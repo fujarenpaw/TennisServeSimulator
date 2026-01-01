@@ -60,78 +60,117 @@ export class PhysicsEngine {
         const maxHeight = config.trajectoryHeight;
         const steps = 50;
 
+        let collisionDetected = false;
+
+        const netZ = 0;
+        const peakZ = netZ + config.trajectoryPeakPosition;
+
+        let peakProgress = 0.5;
+        if (Math.abs(targetZ - startZ) > 0.001) {
+            peakProgress = (peakZ - startZ) / (targetZ - startZ);
+            peakProgress = Math.max(0.1, Math.min(0.9, peakProgress));
+        }
+
         for (let i = 0; i <= steps; i++) {
+            if (collisionDetected) break;
+
             const progress = i / steps;
             const x = startX + (targetX - startX) * progress;
             const z = startZ + (targetZ - startZ) * progress;
 
-            const netZ = 0;
-            const peakZ = netZ + config.trajectoryPeakPosition;
+            // Helper to calculate Y at any progress
+            const calculateY = (p: number) => {
+                const yLinear = startY * (1 - p); // Linear from 1.0 to 0
+                let arcFactor = 0;
+                if (p <= peakProgress) {
+                    arcFactor = Math.sin((Math.PI / 2) * (p / peakProgress));
+                } else {
+                    arcFactor = Math.cos((Math.PI / 2) * ((p - peakProgress) / (1 - peakProgress)));
+                }
+                return yLinear + maxHeight * arcFactor;
+            };
 
-            let peakProgress = 0.5;
-            if (Math.abs(targetZ - startZ) > 0.001) {
-                peakProgress = (peakZ - startZ) / (targetZ - startZ);
-                peakProgress = Math.max(0.1, Math.min(0.9, peakProgress));
+            // Check for net collision
+            if (i > 0) {
+                const prevZ = startZ + (targetZ - startZ) * ((i - 1) / steps);
+                if (prevZ < 0 && z >= 0) {
+                    const progressAtNet = (0 - startZ) / (targetZ - startZ);
+                    const netY = calculateY(progressAtNet);
+
+                    if (netY < COURT_CONSTANTS.netHeight) {
+                        const netX = startX + (targetX - startX) * progressAtNet;
+                        trajectoryPoints.push(new Vector3(netX, netY, 0));
+                        collisionDetected = true;
+                        continue;
+                    }
+                }
             }
 
-            let y;
-            if (progress <= peakProgress) {
-                const localProgress = progress / peakProgress;
-                y = startY + maxHeight * Math.sin((Math.PI / 2) * localProgress);
-            } else {
-                const localProgress = (progress - peakProgress) / (1 - peakProgress);
-                y = startY + maxHeight * Math.cos((Math.PI / 2) * localProgress);
-            }
-
+            const y = calculateY(progress);
             trajectoryPoints.push(new Vector3(x, Math.max(0, y), z));
         }
 
-        const bouncePoint = trajectoryPoints[trajectoryPoints.length - 1];
-        const bounceSpeedMs = speedMs * config.bounceVelocityRetention;
+        if (!collisionDetected) {
+            const bouncePoint = trajectoryPoints[trajectoryPoints.length - 1];
+            const bounceSpeedMs = speedMs * config.bounceVelocityRetention;
 
-        const vectorX = targetX - startX;
-        const vectorZ = targetZ - startZ;
-        const vectorLength = Math.sqrt(vectorX * vectorX + vectorZ * vectorZ);
+            const vectorX = targetX - startX;
+            const vectorZ = targetZ - startZ;
+            const vectorLength = Math.sqrt(vectorX * vectorX + vectorZ * vectorZ);
 
-        const normalizedVectorX = vectorX / vectorLength;
-        const normalizedVectorZ = vectorZ / vectorLength;
+            const normalizedVectorX = vectorX / vectorLength;
+            const normalizedVectorZ = vectorZ / vectorLength;
 
-        const bounceVelocityZ = bounceSpeedMs * normalizedVectorZ;
-        const bounceVelocityX = bounceSpeedMs * normalizedVectorX;
+            const bounceVelocityZ = bounceSpeedMs * normalizedVectorZ;
+            const bounceVelocityX = bounceSpeedMs * normalizedVectorX;
 
-        const bounceFlightTime = 0.5;
-        const bounceDistanceZ = bounceVelocityZ * bounceFlightTime;
-        const bounceDistanceX = bounceVelocityX * bounceFlightTime;
+            const bounceFlightTime = 0.5;
+            const bounceDistanceZ = bounceVelocityZ * bounceFlightTime;
+            const bounceDistanceX = bounceVelocityX * bounceFlightTime;
 
-        const secondBounceZ = targetZ + bounceDistanceZ;
-        const secondBounceX = targetX + bounceDistanceX;
+            const secondBounceZ = targetZ + bounceDistanceZ;
+            const secondBounceX = targetX + bounceDistanceX;
 
-        const bounceSteps = 30;
-        const maxBounceHeight = maxHeight * 0.3;
+            const bounceSteps = 30;
+            const maxBounceHeight = maxHeight * 0.3;
 
-        for (let i = 1; i <= bounceSteps; i++) {
-            const progress = i / bounceSteps;
-            const x = targetX + (secondBounceX - targetX) * progress;
-            const z = targetZ + (secondBounceZ - targetZ) * progress;
-            const y = maxBounceHeight * Math.sin(Math.PI * progress);
+            for (let i = 1; i <= bounceSteps; i++) {
+                const progress = i / bounceSteps;
+                const x = targetX + (secondBounceX - targetX) * progress;
+                const z = targetZ + (secondBounceZ - targetZ) * progress;
+                const y = maxBounceHeight * Math.sin(Math.PI * progress);
 
-            trajectoryPoints.push(new Vector3(x, Math.max(0, y), z));
+                trajectoryPoints.push(new Vector3(x, Math.max(0, y), z));
+            }
+
+            return {
+                points: trajectoryPoints,
+                bouncePoint: bouncePoint,
+                secondBounceZ: secondBounceZ,
+                secondBounceX: secondBounceX,
+                bounceDistanceY: bounceDistanceZ,
+                bounceDistanceX: bounceDistanceX,
+                bounceVelocityY: bounceVelocityZ,
+                bounceVelocityX: bounceVelocityX,
+                timeToFirstBounce: timeToFirstBounce,
+                targetX: targetX
+            };
+        } else {
+            // Collision Case
+            const collisionPoint = trajectoryPoints[trajectoryPoints.length - 1];
+            return {
+                points: trajectoryPoints,
+                bouncePoint: collisionPoint,
+                secondBounceZ: collisionPoint.z,
+                secondBounceX: collisionPoint.x,
+                bounceDistanceY: 0,
+                bounceDistanceX: 0,
+                bounceVelocityY: 0,
+                bounceVelocityX: 0,
+                timeToFirstBounce: timeToFirstBounce, // Approx
+                targetX: targetX
+            };
         }
-
-        return {
-            points: trajectoryPoints,
-            bouncePoint: bouncePoint,
-            secondBounceZ: secondBounceZ,
-            secondBounceX: secondBounceX,
-            bounceDistanceY: bounceDistanceZ, // mapping to original property name for consistency or renamed in generic? 
-            // Original app.js returned: bounceDistanceY: bounceDistanceZ.
-            // My type definition says bounceDistanceY. I will keep it consistent with type but content is Z.
-            bounceDistanceX: bounceDistanceX,
-            bounceVelocityY: bounceVelocityZ,
-            bounceVelocityX: bounceVelocityX,
-            timeToFirstBounce: timeToFirstBounce,
-            targetX: targetX
-        };
     }
 
     static calculateReceiverAnalysis(trajectory: TrajectoryData, config: ServeConfig): AnalysisResult {
