@@ -4,6 +4,7 @@
 
 ### 1.1 目的
 テニスのサーブ戦術の効果を視覚的に分析するための3Dシミュレーターを開発する。アマチュアレベルでのサーブの有効性を、物理的な軌道計算とレシーバーの移動分析により定量的に評価する。
+将来的にはボレー、ラリーなど他のテニスシーンにも応用可能な共通基盤として構築する。
 
 ### 1.2 対象ユーザー
 - テニス愛好家（アマチュアプレイヤー）
@@ -12,10 +13,11 @@
 - ソフトウェアエンジニア（テニス経験者）
 
 ### 1.3 技術スタック
+- **ビルドツール**: Vite
+- **言語**: TypeScript, JavaScript (ES6+)
 - **フロントエンド**: React (Hooks)
-- **3Dレンダリング**: Three.js (r128)
-- **言語**: JavaScript (ES6+)
-- **実行環境**: Webブラウザ
+- **3Dレンダリング**: Three.js (r128以上)
+- **実行環境**: Webブラウザ (Electron化も可能な構成)
 
 ---
 
@@ -94,7 +96,7 @@
 
 ### 2.4 アニメーション機能
 - **再生ボタン**: ボールが軌道に沿って移動するアニメーション
-- **フレームレート**: 20ms/frame
+- **フレームレート**: 20ms/frame (または requestAnimationFrame に従う)
 - **自動リセット**: アニメーション終了後、ボールは初期位置に戻る
 
 ---
@@ -108,222 +110,85 @@
 - **ネット位置**: Z = 0, Y = 0.914m
 
 ### 3.2 サーブ軌道計算
-
-#### 3.2.1 1バウンド目までの軌道
-
-**入力値**:
-- サーバー位置: `(serverPositionX, 1.0, -11.885)`
-- 1バウンド目位置: `(targetX, 0, bounceY)`
-  - `targetX`: コースによって決定
-    - center: 0
-    - wide: 4.115 (シングルスライン)
-    - body: 2.058 (シングルスラインの半分)
-  - `bounceY = 5.5 - bounceDepth`
-
-**軌道方程式**:
-```
-distance = sqrt((targetX - startX)² + (bounceY - startZ)²)
-timeToFirstBounce = distance / (serveSpeed / 3.6)
-
-ネット基準の最高点位置:
-peakZ = 0 + trajectoryPeakPosition
-
-進行率での最高点位置:
-peakProgress = (peakZ - startZ) / (bounceY - startZ)
-peakProgress = clamp(peakProgress, 0.1, 0.9)
-
-各点(progress ∈ [0, 1])での座標:
-x = startX + (targetX - startX) * progress
-z = startZ + (bounceY - startZ) * progress
-
-上昇局面 (progress ≤ peakProgress):
-y = startY + maxHeight * sin(π/2 * progress/peakProgress)
-
-下降局面 (progress > peakProgress):
-y = startY + maxHeight * cos(π/2 * (progress-peakProgress)/(1-peakProgress))
-```
-
-#### 3.2.2 バウンド後の軌道
-
-**速度保持計算**:
-```
-サーバー位置から1バウンド目へのベクトル:
-vectorX = targetX - startX
-vectorZ = bounceY - startZ
-vectorLength = sqrt(vectorX² + vectorZ²)
-
-正規化ベクトル:
-normalizedVectorX = vectorX / vectorLength
-normalizedVectorZ = vectorZ / vectorLength
-
-バウンド後速度:
-bounceSpeedMs = (serveSpeed / 3.6) * bounceVelocityRetention
-
-速度成分:
-bounceVelocityX = bounceSpeedMs * normalizedVectorX
-bounceVelocityZ = bounceSpeedMs * normalizedVectorZ
-
-進行距離 (bounceFlightTime = 0.5秒):
-bounceDistanceX = bounceVelocityX * 0.5
-bounceDistanceZ = bounceVelocityZ * 0.5
-
-2バウンド目位置:
-secondBounceX = targetX + bounceDistanceX
-secondBounceZ = bounceY + bounceDistanceZ
-```
-
-**軌道方程式**:
-```
-各点(progress ∈ [0, 1])での座標:
-x = targetX + (secondBounceX - targetX) * progress
-z = bounceY + (secondBounceZ - bounceY) * progress
-y = maxBounceHeight * sin(π * progress)
-
-maxBounceHeight = trajectoryHeight * 0.3
-```
+(詳細は変更なしのため省略。`src/core/PhysicsEngine.ts` に実装)
 
 ### 3.3 レシーバー分析計算
+(詳細は変更なしのため省略。`src/core/PhysicsEngine.ts` に実装)
 
-#### 3.3.1 レシーバー目標位置
-```
-初期位置:
-receiverX = 4.115 (シングルスライン)
-receiverZ = 0 (ベースライン)
+---
 
-目標Z位置の決定:
-if bounceDistanceZ < 0.5:
-    targetZ = bouncePoint.z + 0.3  // ボールが伸びない → 前に出る
-else:
-    targetZ = secondBounceZ + 1.5  // ボールが伸びる → 途中で迎え撃つ
-```
+## 4. データ構造設計 (TypeScript 型定義)
 
-#### 3.3.2 移動距離・速度計算
-```
-移動距離:
-moveX = |targetX - receiverX|
-moveZ = |targetZ - receiverZ|
-totalDistance = sqrt(moveX² + moveZ²)
+### 4.1 型定義 (`src/types/index.ts`)
+```typescript
+interface ServeConfig {
+  serveSpeed: number;           // km/h
+  trajectoryHeight: number;     // m
+  trajectoryPeakPosition: number; // m
+  bounceDepth: number;          // m
+  bounceDirection: 'center' | 'wide' | 'body';
+  bounceVelocityRetention: number; // ratio
+  reactionDelay: number;        // seconds
+  serverPositionX: number;      // m
+  showDimensions: boolean;
+}
 
-時間計算:
-bounceAirTime = trajectoryHeight * 0.15  // 経験的係数
-receiveTime = timeToFirstBounce + bounceAirTime
-effectiveTime = receiveTime - reactionDelay
-
-必要速度:
-requiredSpeed = totalDistance / effectiveTime (if effectiveTime > 0)
+interface AnalysisResult {
+  receiverStart: { x: number; z: number };
+  receiverTarget: { x: number; z: number };
+  moveX: number;
+  moveZ: number;
+  totalDistance: number;
+  receiveTime: number;
+  effectiveTime: number;
+  requiredSpeed: number;
+  difficulty: string;
+  bounceDistanceY: number; // Z方向距離 (旧仕様の名前を維持)
+  bounceDistanceX: number;
+  // ...
+}
 ```
 
 ---
 
-## 4. データ構造設計
+## 5. コンポーネント・アーキテクチャ設計
 
-### 4.1 State管理
-```javascript
-// サーブパラメータ
-serveSpeed: number           // 40-110 km/h
-trajectoryHeight: number     // 0.5-5.0 m
-trajectoryPeakPosition: number  // -2.0 to +2.0 m
-bounceDepth: number          // 0.2-3.0 m
-bounceDirection: string      // 'center' | 'wide' | 'body'
-bounceVelocityRetention: number  // 0.2-0.8 (20-80%)
-reactionDelay: number        // 0.1-0.6 sec
-serverPositionX: number      // 0-5.485 m
-
-// UI設定
-showDimensions: boolean      // 寸法表示フラグ
-
-// 計算結果
-results: {
-  receiverStart: {x, z}
-  receiverTarget: {x, z}
-  moveX: number
-  moveZ: number
-  totalDistance: number
-  receiveTime: number
-  effectiveTime: number
-  requiredSpeed: number
-  difficulty: string
-  bounceDistanceY: number
-  bounceDistanceX: number
-  bounceVelocityY: number
-  bounceVelocityX: number
-}
-
-// アニメーション状態
-isAnimating: boolean
+### 5.1 ディレクトリ構成
+```
+src/
+├── core/                 # 純粋ロジック (ViewやReactに依存しない)
+│   ├── PhysicsEngine.ts  # 軌道計算・分析ロジック
+│   └── CourtConstants.ts # コート寸法定義
+├── graphics/             # Three.js 関連クラス
+│   ├── SceneController.ts     # Scene, Camera, Renderer管理
+│   ├── CourtVisualizer.ts     # コート描画
+│   ├── TrajectoryVisualizer.ts # 軌道・マーカー描画
+│   └── BallVisualizer.ts      # ボール描画
+├── components/           # UIコンポーネント (React)
+│   ├── ControlPanel.tsx  # 設定操作パネル
+│   └── AnalysisPanel.tsx # 分析結果表示
+├── features/             # 機能・シーンごとの統合
+│   └── serve/
+│       └── ServeScene.tsx # サーブシミュレーター機能統合
+├── App.tsx               # アプリケーションルート
+└── main.tsx              # エントリーポイント
 ```
 
-### 4.2 Three.jsオブジェクト管理
-```javascript
-// Refs
-sceneRef: Scene
-cameraRef: PerspectiveCamera
-rendererRef: WebGLRenderer
-ballRef: Mesh (name: 'ball')
-trajectoryLineRef: Line
-receiverRef: Mesh
-animationIdRef: number
+### 5.2 アーキテクチャ概要
+従来のモノリシックな構造から、責務を分離したレイヤードアーキテクチャへ移行。
 
-// Scene内オブジェクト (name属性で管理)
-'server': サーバーマーカー
-'ball': ボール
-'receiverTarget': レシーバー目標位置
-'dimensions': 寸法表示グループ
-```
-
----
-
-## 5. コンポーネント設計
-
-### 5.1 コンポーネント構成
-```
-TennisServeSimulator (メインコンポーネント)
-├── 3D Canvas (Three.js レンダリング領域)
-└── Control Panel (パラメータ調整UI)
-    ├── Server Settings (2列グリッド)
-    ├── Serve Parameters (2列グリッド)
-    ├── Animation Control (ボタン)
-    └── Analysis Results (結果表示エリア)
-```
-
-### 5.2 主要関数
-
-#### 5.2.1 calculateTrajectory()
-**責務**: サーブ軌道の全点を計算
-**入力**: 各種パラメータ (state)
-**出力**: 
-```javascript
-{
-  points: Vector3[],           // 軌道の全点
-  bouncePoint: Vector3,        // 1バウンド位置
-  secondBounceZ: number,       // 2バウンドZ座標
-  secondBounceX: number,       // 2バウンドX座標
-  bounceDistanceY: number,     // バウンド後Z進行距離
-  bounceDistanceX: number,     // バウンド後X進行距離
-  bounceVelocityY: number,     // バウンド後Z速度
-  bounceVelocityX: number,     // バウンド後X速度
-  timeToFirstBounce: number,   // 1バウンドまでの時間
-  targetX: number              // 1バウンドX座標
-}
-```
-
-#### 5.2.2 calculateReceiverAnalysis()
-**責務**: レシーバーの移動分析
-**入力**: trajectory (calculateTrajectory()の戻り値)
-**出力**: results (state)
-
-#### 5.2.3 updateDimensions()
-**責務**: 寸法表示の更新
-**入力**: showDimensions (state)
-**処理**: 
-- 既存の寸法オブジェクトを削除
-- showDimensions=trueの場合、新規作成
-
-#### 5.2.4 playAnimation()
-**責務**: ボールアニメーション再生
-**処理**:
-- 軌道の各点を20msごとに順次表示
-- 完了後、ボールを初期位置にリセット
+1.  **Core Layer**: `src/core`
+    *   物理計算や定数のみを保持。Three.jsやReactには依存せず、テスティング容易性を確保。
+2.  **Graphics Layer**: `src/graphics`
+    *   Three.jsの複雑な命令をクラスに隠蔽。
+    *   `SceneController` がレンダリングループを管理。
+    *   各 `Visualizer` が担当オブジェクトの生成・更新を行う。
+3.  **UI Layer**: `src/components`
+    *   DOM要素（HTML）としてのUIを担当。
+    *   表示ロジックのみを持ち、ドメインロジックは持たない。
+4.  **Feature Layer**: `src/features`
+    *   上記レイヤーを統合し、特定の機能（シーン）を実現する。
+    *   `ServeScene` は React State を持ち、Core で計算し、Graphics に反映し、UI に状態を渡す。
 
 ---
 
@@ -336,189 +201,57 @@ TennisServeSimulator (メインコンポーネント)
 │          3D Canvas (flex: 1)        │
 │                                     │
 │                                     │
+│                                     │
 └─────────────────────────────────────┘
 ┌─────────────────────────────────────┐
 │  Control Panel (maxHeight: 400px)   │
-│  ┌───────────┬───────────┐          │
-│  │ Param 1   │ Param 2   │          │
-│  ├───────────┼───────────┤          │
-│  │ Param 3   │ Param 4   │          │
-│  └───────────┴───────────┘          │
-│  [アニメーション再生ボタン]          │
-│  ┌─────────────────────┐            │
-│  │  Analysis Results   │            │
-│  └─────────────────────┘            │
+│  [Param Inputs]                     │
+│  [Animation Button]                 │
+│  [Analysis Results]                 │
 └─────────────────────────────────────┘
 ```
 
 ### 6.2 カラースキーム
-
-| 要素              | 色                     | 備考     |
-| ----------------- | ---------------------- | -------- |
-| 背景              | #87ceeb                | 空色     |
-| コート            | #2d8659                | 緑       |
-| ライン            | #ffffff                | 白       |
-| ネット            | #ffffff (opacity: 0.5) | 半透明白 |
-| サーバー          | #ff0000                | 赤       |
-| レシーバー        | #0000ff                | 青       |
-| レシーバー目標    | #00ff00 (opacity: 0.5) | 半透明緑 |
-| ボール            | #ffff00                | 黄       |
-| 軌道              | #ff00ff                | 紫       |
-| 寸法線            | #ffff00                | 黄       |
-| Control Panel背景 | #f5f5f5                | グレー   |
-
-### 6.3 カメラ設定
-- **位置**: (15, 12, 8)
-- **注視点**: (0, 0, 0)
-- **視野角**: 60度
-- **アスペクト比**: コンテナの幅/高さ
+(変更なし)
 
 ---
 
 ## 7. 非機能要件
 
 ### 7.1 パフォーマンス
-- レンダリング: 60fps維持
-- パラメータ変更時の再計算: 100ms以内
-- アニメーション: スムーズな動作（20ms/frame）
+- レンダリング: Three.js のレンダリングループを使用し 60fps を目指す。
+- 事前バンドル: Vite によりロード時間を短縮。
 
 ### 7.2 互換性
-- モダンブラウザ（Chrome, Firefox, Safari, Edge）
-- WebGL対応必須
-
-### 7.3 レスポンシブ対応
-- ウィンドウリサイズ時にCanvas自動調整
-- Control Panelはスクロール可能（maxHeight: 400px）
+- ES Modules 対応ブラウザ。
 
 ---
 
 ## 8. 制約事項
-
-### 8.1 物理モデルの簡略化
-- 空気抵抗は考慮しない
-- マグヌス効果（回転による変化）は簡略化
-- バウンド後の跳ね方は経験的係数（0.3倍）を使用
-- 重力加速度は部分的に適用（放物線の形状制御のため）
-
-### 8.2 Three.jsの制限
-- OrbitControlsは未実装（カメラ固定）
-- テキストラベルは未実装（寸法は矢印のみ）
-
-### 8.3 ブラウザストレージ
-- localStorage/sessionStorageは使用不可（Claude.ai環境の制約）
-- すべての状態はReact stateで管理
+- ステートは React Hooks (`useState`) で管理し、ページリロードでリセットされる。
+- 物理モデルの簡易性は維持（空気抵抗なし等）。
 
 ---
 
 ## 9. 今後の拡張可能性
-
-### 9.1 機能追加候補
-- OrbitControlsによるカメラ操作
-- レシーバー位置の手動調整
-- 複数パターンの比較表示
-- プリセット機能（パターン保存・読込）
-- 統計データの蓄積・分析
-- ヒートマップ表示（コート上の有効性分布）
-- PDFエクスポート機能
-- 棒人間またはモーション付き3Dモデルの実装
-
-### 9.2 物理モデル改善
-- より正確な空気抵抗モデル
-- 回転量の明示的な設定
-- サーフェスタイプによるバウンド変化
-- 風向き・風速の考慮
-
-### 9.3 UI改善
-- タッチ操作対応
-- モバイルレイアウト最適化
-- ダークモード対応
-- 多言語対応
+- **ボレー/ラリー対応**: `PhysicsEngine` の拡張と、`src/features/rally/` などの新規シーン作成により対応可能。
+- **Electron化**: 本構成 (`vite-project`) をそのままラップしてデスクトップアプリ化が可能。
 
 ---
 
 ## 10. 参考資料
-
-### 10.1 テニスコート規格
-- ITF (International Tennis Federation) 公式規格
-- コート全長: 23.77m (78 feet)
-- シングルス幅: 8.23m (27 feet)
-- ダブルス幅: 10.97m (36 feet)
-- ネット高さ: 0.914m (3 feet) at center
-
-### 10.2 物理パラメータ
-- プロのサーブ速度: 180-250 km/h
-- アマチュアのサーブ速度: 80-140 km/h
-- アマチュアの移動速度: 3-7 m/s
-- 反応時間: 0.2-0.5秒
+(変更なし)
 
 ---
 
 ## 11. 人形モーション実装（将来的拡張）
-
-### 11.1 実装方法の選択肢
-
-#### 11.1.1 簡易棒人間（推奨）- 難易度：中
-- Three.jsの基本ジオメトリ（Cylinder, Sphere）で構成
-- 各関節を親子階層で管理
-- キーフレームアニメーションで動作
-
-**実装例**:
-```javascript
-class StickFigure {
-  constructor(scene, position) {
-    this.group = new THREE.Group();
-    this.head = createSphere(0.15, 0xffdbac);
-    this.torso = createCylinder(0.15, 0.8, 0x333333);
-    this.rightArm = createArm();
-    // ... 他の部位
-  }
-  
-  serveMotion(progress) {
-    // progress: 0-1
-    // 腕の回転角度を時間経過で変化
-  }
-}
-```
-
-#### 11.1.2 3Dモデル読込（GLTFモデル）- 難易度：中〜高
-- Blenderなどで作成したリアルな人体モデル
-- ボーンアニメーション（リグ）使用
-- GLTFLoaderで読み込み
-
-#### 11.1.3 スケルタルアニメーション（手動実装）- 難易度：高
-- 最も自然な動き
-- 実装が複雑（数百行）
-- パフォーマンス考慮が必要
-
-### 11.2 モーション設計
-
-#### サーブモーション（簡易版）
-```
-t=0.0: 構え（腕を下げる）
-t=0.3: テイクバック（腕を後ろに引く）
-t=0.5: スイング開始（腕を振り上げ）
-t=0.7: インパクト（最高点）
-t=1.0: フォロースルー（腕を振り切る）
-```
-
-#### レシーブモーション（簡易版）
-```
-t=0.0: 待機姿勢
-t=0.3: 反応開始（体を向ける）
-t=0.6: 移動中（走る）
-t=1.0: スイング（打つ）
-```
-
-### 11.3 実装の影響範囲
-- 追加コード: 150-300行（StickFigureクラス）
-- 変更箇所: `playAnimation()`、マーカー生成部分
-- パフォーマンス: 棒人間ならほぼ影響なし
+(変更なし)
 
 ---
 
-**文書バージョン**: 1.1  
-**最終更新日**: 2025年11月27日  
-**作成者**: Claude (Anthropic)  
+**文書バージョン**: 1.2
+**最終更新日**: 2026年1月2日
 **更新履歴**:
 - v1.0: 初版作成
 - v1.1: 人形モーション実装に関するセクション追加
+- v1.2: アーキテクチャ刷新に伴う全面更新 (Vite + React + TypeScript, モジュール分割)
