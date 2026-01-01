@@ -1,14 +1,14 @@
 import { Vector3 } from 'three';
 
 export interface ServeConfig {
-  serveSpeed: number;           // km/h
-  trajectoryHeight: number;     // m
-  trajectoryPeakPosition: number; // m
-  bounceDepth: number;          // m
-  bounceDirection: 'center' | 'wide' | 'body';
+  serveSpeed: number;             // km/h
+  launchAngle: number;            // degrees (vertical)
+  targetX: number;                // m (x coordinate)
+  targetZ: number;                // m (z coordinate)
+  serverHeight: number;           // m (height of serve impact)
   bounceVelocityRetention: number; // ratio
-  reactionDelay: number;        // seconds
-  serverPositionX: number;      // m
+  reactionDelay: number;          // seconds
+  serverPositionX: number;        // m
   showDimensions: boolean;
 }
 

@@ -1,4 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
+import * as THREE from 'three';
+// @ts-ignore: OrbitControls types might be missing in some setups
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls';
 import { SceneController } from '../../graphics/SceneController';
 import { CourtVisualizer } from '../../graphics/CourtVisualizer';
 import { TrajectoryVisualizer } from '../../graphics/TrajectoryVisualizer';
@@ -8,7 +11,6 @@ import { COURT_CONSTANTS } from '../../core/CourtConstants';
 import type { ServeConfig, AnalysisResult } from '../../types';
 import { ControlPanel } from '../../components/ControlPanel';
 import { AnalysisPanel } from '../../components/AnalysisPanel';
-import { Vector3 } from 'three';
 
 const ServeScene: React.FC = () => {
     const containerRef = useRef<HTMLDivElement>(null);
@@ -16,14 +18,17 @@ const ServeScene: React.FC = () => {
     const courtVisualizerRef = useRef<CourtVisualizer | null>(null);
     const trajectoryVisualizerRef = useRef<TrajectoryVisualizer | null>(null);
     const ballVisualizerRef = useRef<BallVisualizer | null>(null);
+    const controlsRef = useRef<OrbitControls | null>(null);
+
+    const isDraggingRef = useRef(false);
 
     const [config, setConfig] = useState<ServeConfig>({
-        serveSpeed: 70,
-        trajectoryHeight: 2.0,
-        trajectoryPeakPosition: 0,
-        bounceDepth: 1.0,
-        bounceDirection: 'center',
-        bounceVelocityRetention: 0.5,
+        serveSpeed: 180,
+        launchAngle: -5,
+        targetX: 0,
+        targetZ: 4.0,
+        serverHeight: 1.0,     // Default 100cm (UNDER)
+        bounceVelocityRetention: 0.7,
         reactionDelay: 0.3,
         serverPositionX: 0,
         showDimensions: false
@@ -31,6 +36,12 @@ const ServeScene: React.FC = () => {
 
     const [results, setResults] = useState<AnalysisResult | null>(null);
     const [isAnimating, setIsAnimating] = useState(false);
+
+    // Keep latest config in ref for event listeners
+    const configRef = useRef(config);
+    useEffect(() => {
+        configRef.current = config;
+    }, [config]);
 
     // Initialize Scene
     useEffect(() => {
@@ -43,15 +54,92 @@ const ServeScene: React.FC = () => {
 
         court.addToScene(controller.scene);
 
+        // OrbitControls
+        const controls = new OrbitControls(controller.camera, controller.renderer.domElement);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.05;
+        controller.addUpdatable(() => controls.update());
+
         sceneControllerRef.current = controller;
         courtVisualizerRef.current = court;
         trajectoryVisualizerRef.current = trajectory;
         ballVisualizerRef.current = ball;
+        controlsRef.current = controls;
+
+        // Interaction Setup
+        const raycaster = new THREE.Raycaster();
+        const mouse = new THREE.Vector2();
+        const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+
+        const onPointerDown = (event: PointerEvent) => {
+            const rect = controller.renderer.domElement.getBoundingClientRect();
+            mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+            mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+
+            raycaster.setFromCamera(mouse, controller.camera);
+
+            // Check intersection with Target Marker
+            const targetMarker = trajectory.targetMarker;
+            const intersects = raycaster.intersectObject(targetMarker);
+
+            if (intersects.length > 0) {
+                isDraggingRef.current = true;
+                controls.enabled = false;
+                document.body.style.cursor = 'grabbing';
+            }
+        };
+
+        const onPointerMove = (event: PointerEvent) => {
+            if (!isDraggingRef.current) return;
+
+            const rect = controller.renderer.domElement.getBoundingClientRect();
+            mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+            mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+
+            raycaster.setFromCamera(mouse, controller.camera);
+            const targetPoint = new THREE.Vector3();
+            raycaster.ray.intersectPlane(groundPlane, targetPoint);
+
+            if (targetPoint) {
+                // Clamp coords
+                const x = Math.max(-4.115, Math.min(4.115, targetPoint.x));
+                const z = Math.max(0.5, Math.min(6.4, targetPoint.z)); // Keep within service box logic roughly
+
+                const serverX = configRef.current.serverPositionX;
+                const serverHeight = configRef.current.serverHeight;
+                const optimized = PhysicsEngine.optimizeServe(x, z, serverX, serverHeight);
+
+                // Update state
+                setConfig(prev => ({
+                    ...prev,
+                    targetX: x,
+                    targetZ: z,
+                    serveSpeed: optimized.speed,
+                    launchAngle: optimized.angle
+                }));
+            }
+        };
+
+        const onPointerUp = () => {
+            if (isDraggingRef.current) {
+                isDraggingRef.current = false;
+                controls.enabled = true;
+                document.body.style.cursor = 'auto';
+            }
+        };
+
+        const canvas = controller.renderer.domElement;
+        canvas.addEventListener('pointerdown', onPointerDown);
+        window.addEventListener('pointermove', onPointerMove);
+        window.addEventListener('pointerup', onPointerUp);
 
         return () => {
             controller.dispose();
+            canvas.removeEventListener('pointerdown', onPointerDown);
+            window.removeEventListener('pointermove', onPointerMove);
+            window.removeEventListener('pointerup', onPointerUp);
         };
-    }, []);
+    }, []); // Run once
 
     // Calculation & Updates
     useEffect(() => {
@@ -65,16 +153,21 @@ const ServeScene: React.FC = () => {
         // Update Visuals
         trajectoryVisualizerRef.current.updateTrajectory(trajectoryData.points, sceneControllerRef.current.scene);
 
-        const serverPos = new Vector3(config.serverPositionX, 0.3, -COURT_CONSTANTS.length / 2);
-        const receiverPos = new Vector3(analysis.receiverStart.x, 0.3, analysis.receiverStart.z);
-        const targetPos = new Vector3(analysis.receiverTarget.x, 0.2, analysis.receiverTarget.z);
+        // Update markers positions
+        // Server
+        const serverPos = new THREE.Vector3(config.serverPositionX, config.serverHeight, -COURT_CONSTANTS.length / 2);
+        // Receiver
+        const receiverPos = new THREE.Vector3(analysis.receiverStart.x, 0, analysis.receiverStart.z);
+        // Target (Use Config target to keep it stable during drag, or logic target? Logic target might jitter if physics fails)
+        // Let's use config target for the marker itself so we drag THE MARKER.
+        const targetPos = new THREE.Vector3(config.targetX, 0.1, config.targetZ);
 
         trajectoryVisualizerRef.current.updateMarkers(serverPos, receiverPos, targetPos);
         courtVisualizerRef.current.updateDimensions(config.showDimensions);
 
         // Initial Ball Position
         if (!isAnimating) {
-            ballVisualizerRef.current.setPosition(new Vector3(config.serverPositionX, 1, -COURT_CONSTANTS.length / 2));
+            ballVisualizerRef.current.setPosition(serverPos);
         }
 
     }, [config, isAnimating]);
@@ -96,7 +189,7 @@ const ServeScene: React.FC = () => {
                 // End animation
                 setIsAnimating(false);
                 if (ballVisualizerRef.current) {
-                    ballVisualizerRef.current.setPosition(new Vector3(config.serverPositionX, 1, -COURT_CONSTANTS.length / 2));
+                    ballVisualizerRef.current.setPosition(new THREE.Vector3(config.serverPositionX, 2.8, -COURT_CONSTANTS.length / 2));
                 }
                 if (sceneControllerRef.current) {
                     sceneControllerRef.current.removeUpdatable(updateBall);
@@ -104,10 +197,6 @@ const ServeScene: React.FC = () => {
             }
         };
 
-        // We can hook into the SceneController loop for smoother animation 
-        // OR use setTimeout like original. Hooking into loop is better for 60fps.
-        // However, original code used setTimeout(20).
-        // Let's use the SceneController loop.
         sceneControllerRef.current.addUpdatable(updateBall);
     };
 
@@ -115,7 +204,7 @@ const ServeScene: React.FC = () => {
         <div style={{ width: '100%', height: '100vh', display: 'flex', flexDirection: 'column' }}>
             <div ref={containerRef} style={{ flex: 1, position: 'relative' }} />
 
-            <div style={{ maxHeight: '400px', backgroundColor: '#f5f5f5' }}>
+            <div style={{ maxHeight: '400px', backgroundColor: '#f5f5f5', overflowY: 'auto' }}>
                 <ControlPanel
                     config={config}
                     onConfigChange={setConfig}

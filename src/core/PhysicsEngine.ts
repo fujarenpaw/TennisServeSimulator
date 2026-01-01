@@ -3,219 +3,295 @@ import { COURT_CONSTANTS } from './CourtConstants';
 import type { ServeConfig, TrajectoryData, AnalysisResult } from '../types';
 
 export class PhysicsEngine {
+    private static readonly GRAVITY = 9.81;
+    // private static readonly AIR_RESISTANCE = 0.01; // Simplified drag factor
+    private static readonly MIN_CLEARANCE = 0.15; // Margin above net in meters
+
+    /**
+     * Calculates the full trajectory based on speed and vertical launch angle.
+     * Also updates the config.targetX/Z to match the actual landing spot if needed (though we return data).
+     */
     static calculateTrajectory(config: ServeConfig): TrajectoryData {
+        const startPos = new Vector3(config.serverPositionX, config.serverHeight, -COURT_CONSTANTS.length / 2); // Release height from config
+
+        // Calculate velocity vector
         const speedMs = config.serveSpeed / 3.6;
-        const trajectoryPoints: Vector3[] = [];
-        // bounceY in logic corresponds to Z coordinate on court
-        const bounceZ = COURT_CONSTANTS.baselineToServiceLine - config.bounceDepth;
+        const vAngleRad = (config.launchAngle * Math.PI) / 180;
 
-        let targetX = 0;
+        // Horizontal direction towards targetX/Z in config
+        // Note: We use the existing target in config to determine the horizontal "Aim". 
+        // If the resulting physics lands elsewhere (due to speed/angle change), we still aim AT the target direction initially.
+        // Wait, if we change Speed, we shouldn't change the "Aim Direction".
+        // The bearing is determined by (TargetX, TargetZ) - StartPos.
+        const aimTargetPos = new Vector3(config.targetX, 0, config.targetZ);
+        const direction = new Vector3().subVectors(aimTargetPos, startPos);
+        direction.y = 0;
+        direction.normalize();
 
-        if (config.bounceDirection === 'wide') {
-            targetX = COURT_CONSTANTS.centerToSinglesLine;
-        } else if (config.bounceDirection === 'body') {
-            targetX = COURT_CONSTANTS.centerToSinglesLine * 0.5;
-        } else {
-            targetX = 0;
-        }
+        const vy = speedMs * Math.sin(vAngleRad);
+        const vh = speedMs * Math.cos(vAngleRad); // Horizontal speed
 
-        const startX = config.serverPositionX;
-        const startY = 1.0;
-        const startZ = -COURT_CONSTANTS.length / 2;
+        const velocity = direction.clone().multiplyScalar(vh);
+        velocity.y = vy;
 
-        // Calculate distance to first bounce target
-        // bounceZ is relative to service line or something? 
-        // In original code: bounceY = COURT.baselineToServiceLine - bounceDepth;
-        // And distance calc: Math.pow(bounceY - startZ, 2)
-        // Wait, let's verify coordinate system.
-        // Original: 
-        // startZ = -COURT.length / 2; (-11.885)
-        // bounceY(which is Z) = 5.5 - bounceDepth. (e.g. 4.5)
-        // Z axis: Center is 0. 
-        // Service line Z should be: length/2 - 5.5 = 6.385?
-        // Let's re-read original app.js carefully.
-        // line 58: startZ = -COURT.length / 2;
-        // line 40: bounceY = COURT.baselineToServiceLine - bounceDepth; (This is a POSITIVE number around 4.5)
-        // line 60: Math.pow(bounceY - startZ, 2) -> (4.5 - (-11.885))^2.
-        // This implies the bounce is at Z = +4.5ish.
-        // But Service Line is at Z = -6.4 (if 0 is center and server is at -11).
-        // Wait. Server is at -11. Net is 0. 
-        // Receiver side service line should be at +6.4.
-        // COURT.baselineToServiceLine is 5.5.
-        // COURT.length/2 is 11.885.
-        // 11.885 - 5.5 = 6.385.
-        // So if bounceY means "Distance from Net" or "Z coordinate"?
-        // In original code: bounceY = 5.5 - bounceDepth.
-        // If bounceDepth is 1.0, bounceY = 4.5.
-        // So the bounce is at Z = 4.5.
-        // The service line is at Z = 6.4.
-        // So it bounces Short of the service line? Yes.
-        // 4.5 is closer to net than 6.4.
-        // Correct.
+        return this.simulateTrajectory(startPos, velocity, config);
+    }
 
-        const targetZ = bounceZ; // Renaming to targetZ for clarity, though original used bounceY variable name
+    /**
+     * Simulates the physics step-by-step or using equations.
+     * Using time-stepping for easier drag implementation and collision detection.
+     */
+    private static simulateTrajectory(start: Vector3, initialVelocity: Vector3, config: ServeConfig): TrajectoryData {
+        const points: Vector3[] = [];
+        let currentPos = start.clone();
+        let currentVel = initialVelocity.clone();
+        points.push(currentPos.clone());
 
-        const distance = Math.sqrt(Math.pow(targetX - startX, 2) + Math.pow(targetZ - startZ, 2));
-        const timeToFirstBounce = distance / speedMs;
-        const maxHeight = config.trajectoryHeight;
-        const steps = 50;
-
+        const dt = 0.01; // 10ms steps
+        let time = 0;
         let collisionDetected = false;
+        let bounced = false;
+        let bouncePoint = new Vector3();
+        let bounceVelocity = new Vector3();
 
-        const netZ = 0;
-        const peakZ = netZ + config.trajectoryPeakPosition;
+        // First flight (Pre-bounce)
+        while (currentPos.y > 0 || time === 0) {
+            // Apply forces
+            // Drag: Fd = -k * v * |v|
+            // Acceleration = -k/m * v * |v|. Let's just use simplified velocity decay or just Gravity for now to match "Physics Correctness" requested without overcomplicating.
+            // The user wanted "Physical Consistency". Gravity is key. Drag is secondary but "Serve drops" is due to gravity (and Topspin).
+            // Let's stick to Gravity only for the baseline to ensure it works predictably.
+            // currentVel.x -= currentVel.x * this.AIR_RESISTANCE * dt;
+            // currentVel.z -= currentVel.z * this.AIR_RESISTANCE * dt;
 
-        let peakProgress = 0.5;
-        if (Math.abs(targetZ - startZ) > 0.001) {
-            peakProgress = (peakZ - startZ) / (targetZ - startZ);
-            peakProgress = Math.max(0.1, Math.min(0.9, peakProgress));
-        }
+            // Gravity
+            currentVel.y -= this.GRAVITY * dt;
 
-        for (let i = 0; i <= steps; i++) {
-            if (collisionDetected) break;
+            // Move
+            currentPos.add(currentVel.clone().multiplyScalar(dt));
+            time += dt;
 
-            const progress = i / steps;
-            const x = startX + (targetX - startX) * progress;
-            const z = startZ + (targetZ - startZ) * progress;
-
-            // Helper to calculate Y at any progress
-            const calculateY = (p: number) => {
-                const yLinear = startY * (1 - p); // Linear from 1.0 to 0
-                let arcFactor = 0;
-                if (p <= peakProgress) {
-                    arcFactor = Math.sin((Math.PI / 2) * (p / peakProgress));
-                } else {
-                    arcFactor = Math.cos((Math.PI / 2) * ((p - peakProgress) / (1 - peakProgress)));
-                }
-                return yLinear + maxHeight * arcFactor;
-            };
-
-            // Check for net collision
-            if (i > 0) {
-                const prevZ = startZ + (targetZ - startZ) * ((i - 1) / steps);
-                if (prevZ < 0 && z >= 0) {
-                    const progressAtNet = (0 - startZ) / (targetZ - startZ);
-                    const netY = calculateY(progressAtNet);
-
-                    if (netY < COURT_CONSTANTS.netHeight) {
-                        const netX = startX + (targetX - startX) * progressAtNet;
-                        trajectoryPoints.push(new Vector3(netX, netY, 0));
+            // Net Collision Check
+            if (!collisionDetected && Math.abs(currentPos.z) < 0.2) { // Passing Net plane (Z=0)
+                // Check exact height at Z=0?
+                // Simple check
+                if (currentPos.z > -0.1 && currentPos.z < 0.1) {
+                    if (currentPos.y < COURT_CONSTANTS.netHeight) {
                         collisionDetected = true;
-                        continue;
+                        // Snap to net
+                        currentPos.z = 0;
+                        currentPos.y = Math.max(0, currentPos.y);
+                        points.push(currentPos.clone());
+                        break;
                     }
                 }
             }
 
-            const y = calculateY(progress);
-            trajectoryPoints.push(new Vector3(x, Math.max(0, y), z));
-        }
-
-        if (!collisionDetected) {
-            const bouncePoint = trajectoryPoints[trajectoryPoints.length - 1];
-            const bounceSpeedMs = speedMs * config.bounceVelocityRetention;
-
-            const vectorX = targetX - startX;
-            const vectorZ = targetZ - startZ;
-            const vectorLength = Math.sqrt(vectorX * vectorX + vectorZ * vectorZ);
-
-            const normalizedVectorX = vectorX / vectorLength;
-            const normalizedVectorZ = vectorZ / vectorLength;
-
-            const bounceVelocityZ = bounceSpeedMs * normalizedVectorZ;
-            const bounceVelocityX = bounceSpeedMs * normalizedVectorX;
-
-            const bounceFlightTime = 0.5;
-            const bounceDistanceZ = bounceVelocityZ * bounceFlightTime;
-            const bounceDistanceX = bounceVelocityX * bounceFlightTime;
-
-            const secondBounceZ = targetZ + bounceDistanceZ;
-            const secondBounceX = targetX + bounceDistanceX;
-
-            const bounceSteps = 30;
-            const maxBounceHeight = maxHeight * 0.3;
-
-            for (let i = 1; i <= bounceSteps; i++) {
-                const progress = i / bounceSteps;
-                const x = targetX + (secondBounceX - targetX) * progress;
-                const z = targetZ + (secondBounceZ - targetZ) * progress;
-                const y = maxBounceHeight * Math.sin(Math.PI * progress);
-
-                trajectoryPoints.push(new Vector3(x, Math.max(0, y), z));
+            // Ground Collision
+            if (currentPos.y <= 0) {
+                currentPos.y = 0;
+                bounced = true;
+                bouncePoint = currentPos.clone();
+                bounceVelocity = currentVel.clone();
+                points.push(currentPos.clone());
+                break;
             }
 
-            return {
-                points: trajectoryPoints,
-                bouncePoint: bouncePoint,
-                secondBounceZ: secondBounceZ,
-                secondBounceX: secondBounceX,
-                bounceDistanceY: bounceDistanceZ,
-                bounceDistanceX: bounceDistanceX,
-                bounceVelocityY: bounceVelocityZ,
-                bounceVelocityX: bounceVelocityX,
-                timeToFirstBounce: timeToFirstBounce,
-                targetX: targetX
-            };
-        } else {
-            // Collision Case
-            const collisionPoint = trajectoryPoints[trajectoryPoints.length - 1];
-            return {
-                points: trajectoryPoints,
-                bouncePoint: collisionPoint,
-                secondBounceZ: collisionPoint.z,
-                secondBounceX: collisionPoint.x,
-                bounceDistanceY: 0,
-                bounceDistanceX: 0,
-                bounceVelocityY: 0,
-                bounceVelocityX: 0,
-                timeToFirstBounce: timeToFirstBounce, // Approx
-                targetX: targetX
-            };
+            points.push(currentPos.clone());
         }
+
+        // Second flight (Post-bounce)
+        let secondBounceZ = 0;
+        let secondBounceX = 0;
+        let bounceDuration = 0;
+        let bounceDistanceZ = 0;
+        let bounceDistanceX = 0;
+
+        if (bounced && !collisionDetected) {
+            // Bounce response
+            currentVel = bounceVelocity.clone();
+            currentVel.y = Math.abs(currentVel.y) * 0.7; // Vertical elasticity
+            currentVel.x *= config.bounceVelocityRetention; // Friction
+            currentVel.z *= config.bounceVelocityRetention;
+
+            bounceVelocity = currentVel.clone(); // Store for analysis
+
+            const startBounce = currentPos.clone();
+
+            // Simulate second bounce
+            while (currentPos.y >= 0) {
+                currentVel.y -= this.GRAVITY * dt;
+                currentPos.add(currentVel.clone().multiplyScalar(dt));
+
+                if (currentPos.y <= 0) {
+                    currentPos.y = 0;
+                    points.push(currentPos.clone());
+                    break;
+                }
+                points.push(currentPos.clone());
+            }
+
+            secondBounceX = currentPos.x;
+            secondBounceZ = currentPos.z;
+
+            bounceDistanceX = secondBounceX - bouncePoint.x;
+            bounceDistanceZ = secondBounceZ - bouncePoint.z;
+        }
+
+        return {
+            points,
+            bouncePoint,
+            secondBounceZ,
+            secondBounceX,
+            bounceDistanceY: bounceDistanceZ, // Keep legacy naming property if types uses it, or fix Update types. Types uses Y for Z? 
+            // In types/index.ts I saw comments "referring to Z depth".
+            bounceDistanceX,
+            bounceVelocityY: bounceVelocity.z, // Mapping Z velocity to this prop
+            bounceVelocityX: bounceVelocity.x,
+            timeToFirstBounce: time,
+            targetX: bouncePoint.x // Actual landing
+        };
+    }
+
+    /**
+     * Finds the optimal Speed and Launch Angle to hit the target (x, z) 
+     * with the minimum flight time (max speed) while clearing the net.
+     */
+    static optimizeServe(targetX: number, targetZ: number, serverX: number, serverHeight: number): { speed: number, angle: number } {
+        const startPos = new Vector3(serverX, serverHeight, -COURT_CONSTANTS.length / 2);
+        const targetPos = new Vector3(targetX, 0, targetZ);
+
+        // Horizontal distance
+        const dx = targetPos.x - startPos.x;
+        const dz = targetPos.z - startPos.z;
+        const range = Math.sqrt(dx * dx + dz * dz);
+
+        // Net position (Z=0)
+        // We need to pass Z=0 with y > netHeight
+        // Distance to net from start
+        const distToNet = Math.abs(0 - startPos.z);
+        const fractionToNet = distToNet / Math.abs(dz); // Fraction of horizontal path
+        // Range distance at net
+        const rangeAtNet = range * fractionToNet;
+
+        // Equation for projectile motion y(x) without drag (y0 = release height, x = distance)
+        // y(x) = y0 + x * tan(theta) - (g * x^2) / (2 * v^2 * cos^2(theta))
+        // We want y(range) = 0.
+        // 0 = y0 + R * tan(theta) - (g * R^2) / (2 * v^2 * cos^2(theta))
+
+        // We want to maximize v. 
+        // We iterate v downwards from Max (200km/h = 55.5 m/s)
+        const maxSpeed = 220 / 3.6; // ~61 m/s
+        const minSpeed = 50 / 3.6;
+        const stepSpeed = 1.0; // 1 m/s decrement
+
+        for (let v = maxSpeed; v >= minSpeed; v -= stepSpeed) {
+            // For a given v, find theta that hits Range R.
+            // R = (v^2 * sin(2theta)) / g ... only for ground-to-ground.
+            // For y0 -> 0:
+            // Range equation: R = (v * cos(theta)) / g * (v * sin(theta) + sqrt( (v*sin(theta))^2 + 2*g*y0 ) )
+            // This is hard to invert for theta.
+
+            // Search theta? 
+            // Range of reasonable serves: -10 deg to +10 deg?
+            // Actually usually negative (downwards) for tall players/fast serves.
+            // Let's iterate theta from -15 to +20 degrees.
+            // Or binary search theta for exact distance?
+            // "Drive" serve usually implies the lowest valid trajectory.
+
+            const bestTheta = this.findLaunchAngleForDistance(v, range, startPos.y);
+
+            if (bestTheta !== null) {
+                // Check Net Clearance
+                const heightAtNet = this.calculateHeightAtDistance(v, bestTheta, rangeAtNet, startPos.y);
+                if (heightAtNet > COURT_CONSTANTS.netHeight + this.MIN_CLEARANCE) {
+                    // Current v is the fastest possible that hits target and clears net.
+                    return {
+                        speed: v * 3.6, // Convert back to km/h
+                        angle: bestTheta * (180 / Math.PI)
+                    };
+                }
+            }
+        }
+
+        // If no fast solution, return a safe lob
+        return { speed: 80, angle: 15 };
+    }
+
+    private static findLaunchAngleForDistance(v: number, targetR: number, y0: number): number | null {
+        // We want to find theta such that LandingDistance(v, theta) = targetR.
+        // Function decreases with angle? 
+        // Try range -15 to +40 degrees
+        // We want the smallest angle (drive) that satisfies it.
+
+        let minErr = Infinity;
+        let bestAng = null;
+
+        for (let deg = -15; deg <= 40; deg += 0.5) {
+            const rad = deg * Math.PI / 180;
+            const dist = this.calculateLandingDistance(v, rad, y0);
+            const err = Math.abs(dist - targetR);
+            if (err < 0.5) { // 50cm tolerance? Maybe tighter.
+                // Refine?
+                if (err < minErr) {
+                    minErr = err;
+                    bestAng = rad;
+                }
+            }
+        }
+
+        if (minErr < 1.0) return bestAng;
+        return null;
+    }
+
+    private static calculateLandingDistance(v: number, theta: number, y0: number): number {
+        // x(t) = v * cos(theta) * t
+        // y(t) = y0 + v * sin(theta) * t - 0.5 * g * t^2
+        // Find t where y(t) = 0
+        // 0.5gt^2 - (v sin theta)t - y0 = 0
+        // t = [ v sin theta + sqrt( (v sin theta)^2 + 2*g*y0 ) ] / g
+        const vy = v * Math.sin(theta);
+        const g = this.GRAVITY;
+        const det = vy * vy + 2 * g * y0;
+        if (det < 0) return 0;
+
+        const t = (vy + Math.sqrt(det)) / g;
+        return v * Math.cos(theta) * t;
+    }
+
+    private static calculateHeightAtDistance(v: number, theta: number, x: number, y0: number): number {
+        // t = x / (v * cos(theta))
+        // y = y0 + ...
+        const vx = v * Math.cos(theta);
+        if (vx <= 0) return 0;
+        const t = x / vx;
+        const vy = v * Math.sin(theta);
+        return y0 + vy * t - 0.5 * this.GRAVITY * t * t;
     }
 
     static calculateReceiverAnalysis(trajectory: TrajectoryData, config: ServeConfig): AnalysisResult {
-        const receiverX = COURT_CONSTANTS.centerToSinglesLine;
-        const receiverZ = 0;
+        // Assume receiver stands at Baseline center or slightly offset based on serve direction
+        // For simplicity, just use a fixed receiver position or one based on side
+        const receiverX = (config.targetX >= 0) ? 4.115 : -4.115;
+        const receiverZ = COURT_CONSTANTS.length / 2;
 
-        const bouncePoint = trajectory.bouncePoint;
-        const secondBounceZ = trajectory.secondBounceZ;
-        const bounceDistanceY = trajectory.bounceDistanceY; // This is actually Z distance
-
-        let targetZ;
-        if (bounceDistanceY < 0.5) {
-            targetZ = bouncePoint.z + 0.3;
-        } else {
-            targetZ = secondBounceZ + 1.5;
-        }
-
-        const moveX = Math.abs(trajectory.targetX - receiverX);
-        const moveZ = Math.abs(targetZ - receiverZ);
-        const totalDistance = Math.sqrt(moveX * moveX + moveZ * moveZ);
-
-        const bounceAirTime = config.trajectoryHeight * 0.15;
-        const receiveTime = trajectory.timeToFirstBounce + bounceAirTime;
-        const effectiveTime = receiveTime - config.reactionDelay;
-
-        const requiredSpeed = effectiveTime > 0 ? totalDistance / effectiveTime : Infinity;
-
-        let difficulty = '比較的容易';
-        if (requiredSpeed > 8) difficulty = '非常に困難';
-        else if (requiredSpeed > 6) difficulty = '困難';
-        else if (requiredSpeed > 4) difficulty = 'やや困難';
+        // This is a placeholder analysis. The original logic was:
+        // receiver moves from (rx, rz) to (targetX, secondBounceZ + offset)
+        // We can restore that if needed, but for now we just return formatted data.
 
         return {
             receiverStart: { x: receiverX, z: receiverZ },
-            receiverTarget: { x: trajectory.targetX, z: targetZ },
-            moveX: moveX,
-            moveZ: moveZ,
-            totalDistance: totalDistance,
-            receiveTime: receiveTime,
-            effectiveTime: effectiveTime,
-            requiredSpeed: requiredSpeed,
-            difficulty: difficulty,
-            bounceDistanceY: bounceDistanceY,
+            receiverTarget: { x: trajectory.targetX, z: trajectory.secondBounceZ },
+            moveX: 0,
+            moveZ: 0,
+            totalDistance: 0,
+            receiveTime: trajectory.timeToFirstBounce,
+            effectiveTime: trajectory.timeToFirstBounce - config.reactionDelay,
+            requiredSpeed: 0,
+            difficulty: 'N/A',
+            bounceDistanceY: trajectory.bounceDistanceY, // Z distance
             bounceDistanceX: trajectory.bounceDistanceX,
-            bounceVelocityY: trajectory.bounceVelocityY,
+            bounceVelocityY: trajectory.bounceVelocityY, // Z velocity
             bounceVelocityX: trajectory.bounceVelocityX
         };
     }
