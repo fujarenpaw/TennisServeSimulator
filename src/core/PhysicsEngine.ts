@@ -4,7 +4,7 @@ import type { ServeConfig, TrajectoryData, AnalysisResult } from '../types';
 
 export class PhysicsEngine {
     private static readonly GRAVITY = 9.81;
-    // private static readonly AIR_RESISTANCE = 0.01; // Simplified drag factor
+    private static readonly DRAG_COEFFICIENT = 0.021; // Air resistance factor (k = Cd * rho * A / 2m)
     private static readonly MIN_CLEARANCE = 0.15; // Margin above net in meters
 
     /**
@@ -60,17 +60,21 @@ export class PhysicsEngine {
         // First flight (Pre-bounce)
         while (currentPos.y > 0 || time === 0) {
             // Apply forces
-            // Drag: Fd = -k * v * |v|
-            // Acceleration = -k/m * v * |v|. Let's just use simplified velocity decay or just Gravity for now to match "Physics Correctness" requested without overcomplicating.
-            // The user wanted "Physical Consistency". Gravity is key. Drag is secondary but "Serve drops" is due to gravity (and Topspin).
-            // Let's stick to Gravity only for the baseline to ensure it works predictably.
-            // currentVel.x -= currentVel.x * this.AIR_RESISTANCE * dt;
-            // currentVel.z -= currentVel.z * this.AIR_RESISTANCE * dt;
+            // Drag: Fd = -k * |v| * v
+            const speed = currentVel.length();
+            const dragMagnitude = this.DRAG_COEFFICIENT * speed;
 
-            // Gravity
-            currentVel.y -= this.GRAVITY * dt;
+            // Acceleration = Gravity + Drag
+            const accel = new Vector3(
+                -dragMagnitude * currentVel.x,
+                -this.GRAVITY - dragMagnitude * currentVel.y,
+                -dragMagnitude * currentVel.z
+            );
 
-            // Move
+            // Update Velocity (v = v0 + a * dt)
+            currentVel.add(accel.multiplyScalar(dt));
+
+            // Move (p = p0 + v * dt)
             currentPos.add(currentVel.clone().multiplyScalar(dt));
             time += dt;
 
@@ -120,7 +124,16 @@ export class PhysicsEngine {
 
             // Simulate second bounce
             while (currentPos.y >= 0) {
-                currentVel.y -= this.GRAVITY * dt;
+                const speed = currentVel.length();
+                const dragMagnitude = this.DRAG_COEFFICIENT * speed;
+
+                const accel = new Vector3(
+                    -dragMagnitude * currentVel.x,
+                    -this.GRAVITY - dragMagnitude * currentVel.y,
+                    -dragMagnitude * currentVel.z
+                );
+
+                currentVel.add(accel.multiplyScalar(dt));
                 currentPos.add(currentVel.clone().multiplyScalar(dt));
 
                 if (currentPos.y <= 0) {
@@ -201,21 +214,24 @@ export class PhysicsEngine {
     }
 
     private static findLaunchAngleForDistance(v: number, targetR: number, y0: number): number | null {
-        // We want to find theta such that LandingDistance(v, theta) = targetR.
-        // Function decreases with angle? 
-        // Try range -15 to +40 degrees
-        // We want the smallest angle (drive) that satisfies it.
-
-        const TOLERANCE = 0.15; // 15cm tolerance for landing
-
         // Search for the smallest (most downward) angle that hits the target within tolerance
-        for (let deg = -20; deg <= 45; deg += 0.2) {
+        // Using simulation instead of analytic solution which doesn't account for drag
+        const TOLERANCE = 0.25;
+
+        for (let deg = -20; deg <= 45; deg += 0.5) {
             const rad = deg * Math.PI / 180;
-            const dist = this.calculateLandingDistance(v, rad, y0);
+
+            // Simulate a simple horizontal trajectory to find landing distance
+            const traj = this.simulateTrajectory(
+                new Vector3(0, y0, 0),
+                new Vector3(0, v * Math.sin(rad), v * Math.cos(rad)),
+                {} as any // Basic config
+            );
+
+            const dist = traj.bouncePoint.z;
             const err = Math.abs(dist - targetR);
 
             if (err < TOLERANCE) {
-                // Since we iterate from lowest angle up, the first hit within tolerance is our drive serve
                 return rad;
             }
         }
@@ -223,29 +239,28 @@ export class PhysicsEngine {
         return null;
     }
 
-    private static calculateLandingDistance(v: number, theta: number, y0: number): number {
-        // x(t) = v * cos(theta) * t
-        // y(t) = y0 + v * sin(theta) * t - 0.5 * g * t^2
-        // Find t where y(t) = 0
-        // 0.5gt^2 - (v sin theta)t - y0 = 0
-        // t = [ v sin theta + sqrt( (v sin theta)^2 + 2*g*y0 ) ] / g
-        const vy = v * Math.sin(theta);
-        const g = this.GRAVITY;
-        const det = vy * vy + 2 * g * y0;
-        if (det < 0) return 0;
-
-        const t = (vy + Math.sqrt(det)) / g;
-        return v * Math.cos(theta) * t;
-    }
-
     private static calculateHeightAtDistance(v: number, theta: number, x: number, y0: number): number {
-        // t = x / (v * cos(theta))
-        // y = y0 + ...
-        const vx = v * Math.cos(theta);
-        if (vx <= 0) return 0;
-        const t = x / vx;
-        const vy = v * Math.sin(theta);
-        return y0 + vy * t - 0.5 * this.GRAVITY * t * t;
+        // Simulate to find height at specific distance
+        const traj = this.simulateTrajectory(
+            new Vector3(0, y0, 0),
+            new Vector3(0, v * Math.sin(theta), v * Math.cos(theta)),
+            {} as any
+        );
+
+        // Find the point closest to distance x
+        let bestHeight = 0;
+        let minZDiff = Infinity;
+
+        for (const p of traj.points) {
+            const diff = Math.abs(p.z - x);
+            if (diff < minZDiff) {
+                minZDiff = diff;
+                bestHeight = p.y;
+            }
+            if (p.z > x + 0.5) break; // Optimization
+        }
+
+        return bestHeight;
     }
 
     static calculateReceiverAnalysis(trajectory: TrajectoryData, config: ServeConfig): AnalysisResult {
