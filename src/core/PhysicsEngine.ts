@@ -14,55 +14,7 @@ export class PhysicsEngine {
      * Peak height: h_peak = h0 + vy0^2 / (2*g)
      * Peak position (horizontal): x_peak = vx * t_peak
      */
-    private static calculateLaunchAngleFromPeak(
-        startHeight: number,
-        peakHeight: number,
-        peakPosition: number,
-        speed: number
-    ): number {
-        // peakHeight = startHeight + vy0^2 / (2*g)
-        // => vy0^2 = 2*g*(peakHeight - startHeight)
-        const deltaH = peakHeight - startHeight;
-        if (deltaH < 0) {
-            // Peak is below start, use downward trajectory
-            return -10; // Default downward angle
-        }
-
-        const vy0Squared = 2 * this.GRAVITY * deltaH;
-        const vy0 = Math.sqrt(vy0Squared);
-
-        // t_peak = vy0 / g
-        const tPeak = vy0 / this.GRAVITY;
-
-        // At peak position: peakPosition = vx * tPeak
-        // => vx = peakPosition / tPeak
-        const vx = peakPosition / tPeak;
-
-        // speed^2 = vx^2 + vy0^2
-        // Check if this is achievable with given speed
-        const requiredSpeedSquared = vx * vx + vy0Squared;
-        const requiredSpeed = Math.sqrt(requiredSpeedSquared);
-        const speedMs = speed / 3.6;
-
-        if (requiredSpeed > speedMs * 1.1) {
-            // Cannot achieve this peak with current speed, adjust
-            // Use the angle that gives maximum range
-            const ratio = vy0 / vx;
-            return Math.atan(ratio) * (180 / Math.PI);
-        }
-
-        // Calculate angle: tan(angle) = vy0 / vh
-        // where vh is the horizontal component
-        // speed^2 = vh^2 + vy0^2 => vh = sqrt(speed^2 - vy0^2)
-        const vhSquared = speedMs * speedMs - vy0Squared;
-        if (vhSquared < 0) {
-            // Not enough speed, use what we can
-            return Math.atan(vy0 / 1.0) * (180 / Math.PI);
-        }
-        const vh = Math.sqrt(vhSquared);
-        const angleRad = Math.atan(vy0 / vh);
-        return angleRad * (180 / Math.PI);
-    }
+    // Removed calculateLaunchAngleFromPeak as we are switching to direct angle control
 
     /**
      * Calculates the full trajectory based on peak height and peak position.
@@ -70,28 +22,20 @@ export class PhysicsEngine {
     static calculateTrajectory(config: ServeConfig): TrajectoryData {
         const startPos = new Vector3(config.serverPositionX, config.serverHeight, -COURT_CONSTANTS.length / 2);
 
-        // Calculate horizontal direction to target
-        const aimTargetPos = new Vector3(config.targetX, 0, config.targetZ);
-        const direction = new Vector3().subVectors(aimTargetPos, startPos);
-        direction.y = 0;
-        direction.normalize();
-
-        // Calculate launch angle from peak parameters
-        const launchAngle = this.calculateLaunchAngleFromPeak(
-            config.serverHeight,
-            config.trajectoryPeakHeight,
-            config.peakPosition - startPos.z, // peakPosition is relative to net (Z=0), adjust for start position
-            config.serveSpeed
-        );
-
         const speedMs = config.serveSpeed / 3.6;
-        const vAngleRad = (launchAngle * Math.PI) / 180;
+        const vAngleRad = (config.launchAngleV * Math.PI) / 180;
+        const hAngleRad = (config.launchAngleH * Math.PI) / 180;
 
+        // Calculate velocity vector using spherical coordinates
         const vy = speedMs * Math.sin(vAngleRad);
         const vh = speedMs * Math.cos(vAngleRad);
 
-        const velocity = direction.clone().multiplyScalar(vh);
-        velocity.y = vy;
+        // hAngleH is clockwise from Z+ axis or similar.
+        // Let's assume hAngle 0 is straight parallel to Z axis.
+        const vx = vh * Math.sin(hAngleRad);
+        const vz = vh * Math.cos(hAngleRad);
+
+        const velocity = new Vector3(vx, vy, vz);
 
         return this.simulateTrajectory(startPos, velocity, config);
     }
@@ -213,13 +157,16 @@ export class PhysicsEngine {
      * Finds the optimal Speed and trajectory parameters to hit the target (x, z) 
      * with the minimum flight time (max speed) while clearing the net.
      */
-    static optimizeServe(targetX: number, targetZ: number, serverX: number, serverHeight: number): { speed: number, trajectoryPeakHeight: number, peakPosition: number } {
+    static optimizeServe(targetX: number, targetZ: number, serverX: number, serverHeight: number): { speed: number, launchAngleV: number, launchAngleH: number } {
         const startPos = new Vector3(serverX, serverHeight, -COURT_CONSTANTS.length / 2);
         const targetPos = new Vector3(targetX, 0, targetZ);
 
-        // Horizontal distance
+        // Horizontal direction to target
         const dx = targetPos.x - startPos.x;
         const dz = targetPos.z - startPos.z;
+        const hAngleRad = Math.atan2(dx, dz);
+        const hAngleDeg = hAngleRad * 180 / Math.PI;
+
         const range = Math.sqrt(dx * dx + dz * dz);
 
         // Net position (Z=0)
@@ -227,7 +174,7 @@ export class PhysicsEngine {
         const fractionToNet = distToNet / Math.abs(dz);
         const rangeAtNet = range * fractionToNet;
 
-        const maxSpeed = 220 / 3.6;
+        const maxSpeed = 150 / 3.6; // Limit to 150km/h
         const minSpeed = 50 / 3.6;
         const stepSpeed = 1.0;
 
@@ -236,26 +183,10 @@ export class PhysicsEngine {
             if (bestTheta !== null) {
                 const heightAtNet = this.calculateHeightAtDistance(v, bestTheta, rangeAtNet, startPos.y);
                 if (heightAtNet > COURT_CONSTANTS.netHeight + this.MIN_CLEARANCE) {
-                    // Calculate peak height and position from this angle
-                    const vy0 = v * Math.sin(bestTheta);
-                    const vx = v * Math.cos(bestTheta);
-
-                    // Peak height: h_peak = h0 + vy0^2 / (2*g)
-                    const peakHeight = startPos.y + (vy0 * vy0) / (2 * this.GRAVITY);
-
-                    // Time to peak: t_peak = vy0 / g
-                    const tPeak = vy0 / this.GRAVITY;
-
-                    // Distance traveled to peak (horizontal)
-                    const distToPeak = vx * tPeak;
-
-                    // Peak position in Z coordinates (relative to net at Z=0)
-                    const peakPosZ = startPos.z + (dz / range) * distToPeak;
-
                     return {
-                        speed: v * 3.6, // Convert back to km/h
-                        trajectoryPeakHeight: peakHeight,
-                        peakPosition: peakPosZ
+                        speed: v * 3.6,
+                        launchAngleV: bestTheta * 180 / Math.PI,
+                        launchAngleH: hAngleDeg
                     };
                 }
             }
@@ -264,8 +195,8 @@ export class PhysicsEngine {
         // If no fast solution, return a safe lob
         return {
             speed: 80,
-            trajectoryPeakHeight: 5.0,
-            peakPosition: 3.0
+            launchAngleV: 20,
+            launchAngleH: hAngleDeg
         };
     }
 
@@ -275,23 +206,20 @@ export class PhysicsEngine {
         // Try range -15 to +40 degrees
         // We want the smallest angle (drive) that satisfies it.
 
-        let minErr = Infinity;
-        let bestAng = null;
+        const TOLERANCE = 0.15; // 15cm tolerance for landing
 
-        for (let deg = -15; deg <= 40; deg += 0.5) {
+        // Search for the smallest (most downward) angle that hits the target within tolerance
+        for (let deg = -20; deg <= 45; deg += 0.2) {
             const rad = deg * Math.PI / 180;
             const dist = this.calculateLandingDistance(v, rad, y0);
             const err = Math.abs(dist - targetR);
-            if (err < 0.5) { // 50cm tolerance? Maybe tighter.
-                // Refine?
-                if (err < minErr) {
-                    minErr = err;
-                    bestAng = rad;
-                }
+
+            if (err < TOLERANCE) {
+                // Since we iterate from lowest angle up, the first hit within tolerance is our drive serve
+                return rad;
             }
         }
 
-        if (minErr < 1.0) return bestAng;
         return null;
     }
 
@@ -322,8 +250,8 @@ export class PhysicsEngine {
 
     static calculateReceiverAnalysis(trajectory: TrajectoryData, config: ServeConfig): AnalysisResult {
         // Receiver starts at baseline on the appropriate side
-        const receiverX = (config.targetX >= 0) ? 4.115 : -4.115;
-        const receiverZ = COURT_CONSTANTS.length / 2;
+        const receiverX = config.receiverPositionX;
+        const receiverZ = config.receiverPositionZ;
 
         // Find optimal return position on the trajectory
         // This is the point on the serve trajectory that minimizes receiver's travel distance

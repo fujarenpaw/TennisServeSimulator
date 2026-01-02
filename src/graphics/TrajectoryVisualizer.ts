@@ -21,7 +21,7 @@ export class TrajectoryVisualizer {
         scene.add(this.receiverMarker);
 
         // Target Marker (Green Ghost)
-        const targetGeometry = new THREE.SphereGeometry(0.2, 16, 16);
+        const targetGeometry = new THREE.SphereGeometry(0.4, 16, 16);
         const targetMaterial = new THREE.MeshStandardMaterial({
             color: 0x00ff00,
             transparent: true,

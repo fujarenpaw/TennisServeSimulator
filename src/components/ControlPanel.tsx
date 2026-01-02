@@ -31,8 +31,8 @@ export const ControlPanel: React.FC<Props> = ({ config, onConfigChange, onPlayAn
             updateConfig({
                 [key]: value,
                 serveSpeed: optimized.speed,
-                trajectoryPeakHeight: optimized.trajectoryPeakHeight,
-                peakPosition: optimized.peakPosition
+                launchAngleV: optimized.launchAngleV,
+                launchAngleH: optimized.launchAngleH
             });
         } else {
             // For all other parameters, just update directly
@@ -109,7 +109,7 @@ export const ControlPanel: React.FC<Props> = ({ config, onConfigChange, onPlayAn
                         <input
                             type="range"
                             min="40"
-                            max="220"
+                            max="150"
                             step="1"
                             value={config.serveSpeed}
                             onChange={(e) => handleChange('serveSpeed', Number(e.target.value))}
@@ -117,41 +117,36 @@ export const ControlPanel: React.FC<Props> = ({ config, onConfigChange, onPlayAn
                         />
                     </div>
 
-                    {/* Trajectory Peak Height */}
+                    {/* Launch Angle Vertical */}
                     <div style={{ marginBottom: '10px' }}>
                         <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold', fontSize: '14px' }}>
-                            軌道の最高点の高さ: {config.trajectoryPeakHeight.toFixed(2)} m
+                            発射角度 (仰角): {config.launchAngleV.toFixed(1)}°
                         </label>
                         <input
                             type="range"
-                            min="0.5"
-                            max="10"
+                            min="-30"
+                            max="45"
                             step="0.1"
-                            value={config.trajectoryPeakHeight}
-                            onChange={(e) => handleChange('trajectoryPeakHeight', Number(e.target.value))}
+                            value={config.launchAngleV}
+                            onChange={(e) => handleChange('launchAngleV', Number(e.target.value))}
                             style={{ width: '100%' }}
                         />
                     </div>
 
-                    {/* Peak Position */}
+                    {/* Launch Angle Horizontal */}
                     <div>
                         <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold', fontSize: '14px' }}>
-                            最高点の位置 (ネット基準): {config.peakPosition.toFixed(2)} m
+                            発射方向 (左右): {config.launchAngleH.toFixed(1)}°
                         </label>
                         <input
                             type="range"
-                            min={-6}
-                            max={12}
+                            min="-30"
+                            max="30"
                             step="0.1"
-                            value={config.peakPosition}
-                            onChange={(e) => handleChange('peakPosition', Number(e.target.value))}
+                            value={config.launchAngleH}
+                            onChange={(e) => handleChange('launchAngleH', Number(e.target.value))}
                             style={{ width: '100%' }}
                         />
-                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', color: '#666' }}>
-                            <span>サーバー側</span>
-                            <span>ネット</span>
-                            <span>相手コート</span>
-                        </div>
                     </div>
                 </fieldset>
 
@@ -222,6 +217,36 @@ export const ControlPanel: React.FC<Props> = ({ config, onConfigChange, onPlayAn
                             step="0.05"
                             value={config.reactionDelay}
                             onChange={(e) => handleChange('reactionDelay', Number(e.target.value))}
+                            style={{ width: '100%' }}
+                        />
+                    </div>
+
+                    <div style={{ marginBottom: '10px' }}>
+                        <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold', fontSize: '14px' }}>
+                            初期立ち位置 (横): {config.receiverPositionX.toFixed(2)} m
+                        </label>
+                        <input
+                            type="range"
+                            min={-COURT_CONSTANTS.width / 2 - 2}
+                            max={COURT_CONSTANTS.width / 2 + 2}
+                            step="0.1"
+                            value={config.receiverPositionX}
+                            onChange={(e) => handleChange('receiverPositionX', Number(e.target.value))}
+                            style={{ width: '100%' }}
+                        />
+                    </div>
+
+                    <div>
+                        <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold', fontSize: '14px' }}>
+                            初期立ち位置 (深さ): {config.receiverPositionZ.toFixed(2)} m
+                        </label>
+                        <input
+                            type="range"
+                            min={COURT_CONSTANTS.length / 2 - 3}
+                            max={COURT_CONSTANTS.length / 2 + 3}
+                            step="0.1"
+                            value={config.receiverPositionZ}
+                            onChange={(e) => handleChange('receiverPositionZ', Number(e.target.value))}
                             style={{ width: '100%' }}
                         />
                     </div>

@@ -25,9 +25,9 @@ const ServeScene: React.FC = () => {
     const isDraggingRef = useRef(false);
 
     const [config, setConfig] = useState<ServeConfig>({
-        serveSpeed: 180,
-        trajectoryPeakHeight: 3.0,  // 3m peak height
-        peakPosition: 2.0,           // Peak at 2m past net
+        serveSpeed: 150,
+        launchAngleV: -5,
+        launchAngleH: 0,
         targetX: 0,
         targetZ: 4.0,
         serverHeight: 1.0,           // Default 100cm (UNDER)
@@ -35,6 +35,8 @@ const ServeScene: React.FC = () => {
         reactionDelay: 0.3,
         serverPositionX: 1.5,
         showDimensions: false,
+        receiverPositionX: 4.115,
+        receiverPositionZ: COURT_CONSTANTS.length / 2,
         receiverSpeed: 5.0  // Default receiver speed: 5 m/s
     });
 
@@ -80,6 +82,7 @@ const ServeScene: React.FC = () => {
         const raycaster = new THREE.Raycaster();
         const mouse = new THREE.Vector2();
         const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+        let dragType: 'target' | 'receiver' | null = null;
 
         const onPointerDown = (event: PointerEvent) => {
             const rect = controller.renderer.domElement.getBoundingClientRect();
@@ -94,8 +97,24 @@ const ServeScene: React.FC = () => {
 
             if (intersects.length > 0) {
                 isDraggingRef.current = true;
+                dragType = 'target';
                 controls.enabled = false;
                 document.body.style.cursor = 'grabbing';
+                return;
+            }
+
+            // Check intersection with Receiver Marker
+            if (receiverVisualizerRef.current) {
+                // Accessing private property for raycasting - in a real app we might add a getter or use a group
+                // @ts-ignore
+                const receiverMesh = receiverVisualizerRef.current.receiverMesh;
+                const intersectsReceiver = raycaster.intersectObject(receiverMesh);
+                if (intersectsReceiver.length > 0) {
+                    isDraggingRef.current = true;
+                    dragType = 'receiver';
+                    controls.enabled = false;
+                    document.body.style.cursor = 'grabbing';
+                }
             }
         };
 
@@ -111,29 +130,41 @@ const ServeScene: React.FC = () => {
             raycaster.ray.intersectPlane(groundPlane, targetPoint);
 
             if (targetPoint) {
-                // Clamp coords
-                const x = Math.max(-4.115, Math.min(4.115, targetPoint.x));
-                const z = Math.max(0.5, Math.min(6.4, targetPoint.z)); // Keep within service box logic roughly
+                if (dragType === 'target') {
+                    // Clamp coords
+                    const x = Math.max(-4.115, Math.min(4.115, targetPoint.x));
+                    const z = Math.max(0.5, Math.min(6.4, targetPoint.z)); // Keep within service box logic roughly
 
-                const serverX = configRef.current.serverPositionX;
-                const serverHeight = configRef.current.serverHeight;
-                const optimized = PhysicsEngine.optimizeServe(x, z, serverX, serverHeight);
+                    const serverX = configRef.current.serverPositionX;
+                    const serverHeight = configRef.current.serverHeight;
+                    const optimized = PhysicsEngine.optimizeServe(x, z, serverX, serverHeight);
 
-                // Update state
-                setConfig(prev => ({
-                    ...prev,
-                    targetX: x,
-                    targetZ: z,
-                    serveSpeed: optimized.speed,
-                    trajectoryPeakHeight: optimized.trajectoryPeakHeight,
-                    peakPosition: optimized.peakPosition
-                }));
+                    // Update state
+                    setConfig(prev => ({
+                        ...prev,
+                        targetX: x,
+                        targetZ: z,
+                        serveSpeed: optimized.speed,
+                        launchAngleV: optimized.launchAngleV,
+                        launchAngleH: optimized.launchAngleH
+                    }));
+                } else if (dragType === 'receiver') {
+                    const x = Math.max(-COURT_CONSTANTS.width / 2 - 2, Math.min(COURT_CONSTANTS.width / 2 + 2, targetPoint.x));
+                    const z = Math.max(COURT_CONSTANTS.length / 2, Math.min(COURT_CONSTANTS.length / 2 + 5, targetPoint.z));
+
+                    setConfig(prev => ({
+                        ...prev,
+                        receiverPositionX: x,
+                        receiverPositionZ: z
+                    }));
+                }
             }
         };
 
         const onPointerUp = () => {
             if (isDraggingRef.current) {
                 isDraggingRef.current = false;
+                dragType = null;
                 controls.enabled = true;
                 document.body.style.cursor = 'auto';
             }
@@ -169,11 +200,11 @@ const ServeScene: React.FC = () => {
         const serverPos = new THREE.Vector3(config.serverPositionX, config.serverHeight, -COURT_CONSTANTS.length / 2);
         // Receiver
         const receiverPos = new THREE.Vector3(analysis.receiverStart.x, 0, analysis.receiverStart.z);
-        // Target (Use Config target to keep it stable during drag, or logic target? Logic target might jitter if physics fails)
-        // Let's use config target for the marker itself so we drag THE MARKER.
-        const targetPos = new THREE.Vector3(config.targetX, 0.1, config.targetZ);
+        // Target (Where the ball actually lands based on physics)
+        const landingPos = trajectoryData.bouncePoint.clone();
+        landingPos.y = 0.1;
 
-        trajectoryVisualizerRef.current.updateMarkers(serverPos, receiverPos, targetPos);
+        trajectoryVisualizerRef.current.updateMarkers(serverPos, receiverPos, landingPos);
         courtVisualizerRef.current.updateDimensions(config.showDimensions);
 
         // Initial Ball Position
@@ -183,7 +214,7 @@ const ServeScene: React.FC = () => {
 
         // Update receiver markers
         if (receiverVisualizerRef.current) {
-            receiverVisualizerRef.current.updateMarkers(receiverPos, targetPos);
+            receiverVisualizerRef.current.updateMarkers(receiverPos, landingPos);
         }
 
     }, [config, isAnimating]);
