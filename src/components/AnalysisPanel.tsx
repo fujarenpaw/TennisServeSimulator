@@ -24,6 +24,9 @@ export const AnalysisPanel: React.FC<Props> = ({ results }) => {
                 <div>レシーブ時間: {results.receiveTime.toFixed(2)} 秒</div>
                 <div>有効時間: {results.effectiveTime.toFixed(2)} 秒</div>
                 <div>必要速度: {results.requiredSpeed.toFixed(2)} m/s</div>
+                <div style={{ color: results.timingBuffer > 0 ? 'green' : 'red' }}>
+                    準備時間: {(results.timingBuffer * 1000).toFixed(0)} ms
+                </div>
 
                 <div style={{ gridColumn: '1 / -1', borderTop: '1px solid #ddd', paddingTop: '10px', marginTop: '5px' }}>
                     <strong>バウンド後の挙動:</strong>

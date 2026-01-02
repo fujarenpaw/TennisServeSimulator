@@ -18,7 +18,6 @@ export class PhysicsEngine {
         startHeight: number,
         peakHeight: number,
         peakPosition: number,
-        horizontalDistance: number,
         speed: number
     ): number {
         // peakHeight = startHeight + vy0^2 / (2*g)
@@ -71,11 +70,10 @@ export class PhysicsEngine {
     static calculateTrajectory(config: ServeConfig): TrajectoryData {
         const startPos = new Vector3(config.serverPositionX, config.serverHeight, -COURT_CONSTANTS.length / 2);
 
-        // Calculate horizontal distance and direction to target
+        // Calculate horizontal direction to target
         const aimTargetPos = new Vector3(config.targetX, 0, config.targetZ);
         const direction = new Vector3().subVectors(aimTargetPos, startPos);
         direction.y = 0;
-        const horizontalDistance = direction.length();
         direction.normalize();
 
         // Calculate launch angle from peak parameters
@@ -83,7 +81,6 @@ export class PhysicsEngine {
             config.serverHeight,
             config.trajectoryPeakHeight,
             config.peakPosition - startPos.z, // peakPosition is relative to net (Z=0), adjust for start position
-            horizontalDistance,
             config.serveSpeed
         );
 
@@ -165,7 +162,6 @@ export class PhysicsEngine {
         // Second flight (Post-bounce)
         let secondBounceZ = 0;
         let secondBounceX = 0;
-        let bounceDuration = 0;
         let bounceDistanceZ = 0;
         let bounceDistanceX = 0;
 
@@ -177,8 +173,6 @@ export class PhysicsEngine {
             currentVel.z *= config.bounceVelocityRetention;
 
             bounceVelocity = currentVel.clone(); // Store for analysis
-
-            const startBounce = currentPos.clone();
 
             // Simulate second bounce
             while (currentPos.y >= 0) {
@@ -327,29 +321,229 @@ export class PhysicsEngine {
     }
 
     static calculateReceiverAnalysis(trajectory: TrajectoryData, config: ServeConfig): AnalysisResult {
-        // Assume receiver stands at Baseline center or slightly offset based on serve direction
-        // For simplicity, just use a fixed receiver position or one based on side
+        // Receiver starts at baseline on the appropriate side
         const receiverX = (config.targetX >= 0) ? 4.115 : -4.115;
         const receiverZ = COURT_CONSTANTS.length / 2;
 
-        // This is a placeholder analysis. The original logic was:
-        // receiver moves from (rx, rz) to (targetX, secondBounceZ + offset)
-        // We can restore that if needed, but for now we just return formatted data.
+        // Find optimal return position on the trajectory
+        // This is the point on the serve trajectory that minimizes receiver's travel distance
+        const optimalReturnPoint = this.findOptimalReturnPosition(
+            trajectory.points,
+            receiverX,
+            receiverZ,
+            config
+        );
+
+        // targetX is 1m laterally before the trajectory point
+        // If receiver is on the right and moving left, stop 1m to the right of the ball
+        // If receiver is on the left and moving right, stop 1m to the left of the ball
+        const lateralOffset = (receiverX > optimalReturnPoint.x) ? 1.0 : -1.0;
+        const targetX = optimalReturnPoint.x + lateralOffset;
+        const targetZ = optimalReturnPoint.z; // No Z offset, as user said "lateral 1m before"
+
+        // Calculate movement distances
+        const moveX = targetX - receiverX;
+        const moveZ = targetZ - receiverZ;
+        const totalDistance = Math.sqrt(moveX * moveX + moveZ * moveZ);
+
+        // Time calculations
+        const receiveTime = optimalReturnPoint.time;
+        const effectiveTime = Math.max(0, receiveTime - config.reactionDelay);
+        const requiredSpeed = effectiveTime > 0 ? totalDistance / effectiveTime : Infinity;
+
+        // Difficulty assessment
+        let difficulty = 'N/A';
+        if (requiredSpeed < 4) {
+            difficulty = '比較的容易';
+        } else if (requiredSpeed < 6) {
+            difficulty = 'やや困難';
+        } else if (requiredSpeed < 8) {
+            difficulty = '困難';
+        } else {
+            difficulty = '非常に困難';
+        }
+
+        // Calculate receiver movement
+        const receiverMovement = this.calculateReceiverMovement(
+            receiverX,
+            receiverZ,
+            targetX,
+            targetZ,
+            receiveTime,
+            config
+        );
+
+        const timingBuffer = receiveTime - (config.reactionDelay + (totalDistance / config.receiverSpeed));
 
         return {
             receiverStart: { x: receiverX, z: receiverZ },
-            receiverTarget: { x: trajectory.targetX, z: trajectory.secondBounceZ },
-            moveX: 0,
-            moveZ: 0,
-            totalDistance: 0,
-            receiveTime: trajectory.timeToFirstBounce,
-            effectiveTime: trajectory.timeToFirstBounce - config.reactionDelay,
-            requiredSpeed: 0,
-            difficulty: 'N/A',
-            bounceDistanceY: trajectory.bounceDistanceY, // Z distance
+            receiverTarget: { x: targetX, z: targetZ },
+            moveX,
+            moveZ,
+            totalDistance,
+            receiveTime,
+            effectiveTime,
+            requiredSpeed,
+            difficulty,
+            bounceDistanceY: trajectory.bounceDistanceY,
             bounceDistanceX: trajectory.bounceDistanceX,
-            bounceVelocityY: trajectory.bounceVelocityY, // Z velocity
-            bounceVelocityX: trajectory.bounceVelocityX
+            bounceVelocityY: trajectory.bounceVelocityY,
+            bounceVelocityX: trajectory.bounceVelocityX,
+            timingBuffer,
+            receiverMovement
         };
+    }
+
+    /**
+     * Find the optimal position on the serve trajectory for the receiver to return the ball
+     * This minimizes the receiver's travel distance while considering the ball's trajectory
+     */
+    private static findOptimalReturnPosition(
+        trajectoryPoints: Vector3[],
+        receiverX: number,
+        receiverZ: number,
+        config: ServeConfig
+    ): { x: number; z: number; time: number } {
+        const dt = 0.01; // Time step used in trajectory simulation
+        let bestScore = -Infinity;
+        let optimalPoint = { x: receiverX, z: receiverZ, time: 0 };
+
+        // 1. Find the first bounce index
+        let firstBounceIndex = -1;
+        for (let i = 0; i < trajectoryPoints.length; i++) {
+            if (trajectoryPoints[i].y <= 0.01 && i > 10) { // Small epsilon and avoid start
+                firstBounceIndex = i;
+                break;
+            }
+        }
+
+        // If no bounce detected (e.g. net hit), stay at start
+        if (firstBounceIndex === -1) {
+            return optimalPoint;
+        }
+
+        const IDEAL_HIT_HEIGHT = 1.0; // Optimal hitting height in meters
+        const IDEAL_BUFFER_TIME = 0.25; // 250ms preparation time is enough
+
+        // 2. Iterate through points after the first bounce
+        for (let i = firstBounceIndex + 1; i < trajectoryPoints.length; i++) {
+            const point = trajectoryPoints[i];
+            const ballArrivalTime = i * dt;
+
+            // Constraint: No backward movement (stay on/in front of baseline)
+            let targetZ = point.z;
+            if (targetZ > receiverZ) {
+                targetZ = receiverZ;
+            }
+
+            // Calculate horizontal distance to this target position
+            const dx = point.x - receiverX;
+            const dz = targetZ - receiverZ;
+            const distance = Math.sqrt(dx * dx + dz * dz);
+
+            // Calculate timing
+            const travelTime = distance / config.receiverSpeed;
+            const receiverArrivalTime = config.reactionDelay + travelTime;
+            const timeBuffer = ballArrivalTime - receiverArrivalTime;
+
+            // Factor 1: Height Score (Closer to 1.0m is better)
+            const heightDiff = Math.abs(point.y - IDEAL_HIT_HEIGHT);
+            const heightScore = Math.max(0, 1.0 - heightDiff * 0.8);
+
+            // Factor 2: Distance Score (Very high priority: Minimal movement)
+            const distanceScore = Math.max(0, 1.0 - distance / 3.0);
+
+            // Factor 3: Buffer Score (Arriving before ball. Saturated at IDEAL_BUFFER_TIME)
+            let bufferScore = 0;
+            if (timeBuffer > 0) {
+                bufferScore = Math.min(1.0, timeBuffer / IDEAL_BUFFER_TIME);
+            } else {
+                bufferScore = -20.0; // Strictly reachable check
+            }
+
+            // Combined Score
+            // Priority: Buffer (Reachable) > Distance (Minimal Move) > Height
+            const score = heightScore * 1.5 + distanceScore * 8.0 + bufferScore * 10.0;
+
+            if (score > bestScore) {
+                bestScore = score;
+                optimalPoint = { x: point.x, z: targetZ, time: ballArrivalTime };
+            }
+        }
+
+        return optimalPoint;
+    }
+
+    /**
+     * Calculate receiver movement path and timing using actual constant speed
+     */
+    private static calculateReceiverMovement(
+        startX: number,
+        startZ: number,
+        targetX: number,
+        targetZ: number,
+        ballArrivalTime: number,
+        config: ServeConfig
+    ): import('../types').ReceiverMovement {
+        const startPosition = new Vector3(startX, 0, startZ);
+        const targetPosition = new Vector3(targetX, 0, targetZ);
+
+        // Calculate movement distances
+        const moveX = targetX - startX;
+        const moveZ = targetZ - startZ;
+        const totalDistance = Math.sqrt(moveX * moveX + moveZ * moveZ);
+
+        // Time to complete movement lineally
+        const travelTimeSeconds = totalDistance / config.receiverSpeed;
+
+        // Effective time (after reaction delay)
+        const effectiveTimeAvailable = Math.max(0, ballArrivalTime - config.reactionDelay);
+        const canReach = totalDistance <= config.receiverSpeed * effectiveTimeAvailable + 0.001;
+
+        // Generate movement path
+        const movementPath: any[] = [];
+        const numSteps = 30; // Number of animation frames
+
+        for (let i = 0; i <= numSteps; i++) {
+            const t = i / numSteps;
+            const animationTime = t * ballArrivalTime;
+
+            if (animationTime < config.reactionDelay) {
+                // Stay at start during reaction delay
+                movementPath.push(startPosition.clone());
+            } else {
+                const movementTime = animationTime - config.reactionDelay;
+
+                if (movementTime < travelTimeSeconds) {
+                    // Moving at constant speed (with easing for current segment)
+                    const movementProgress = travelTimeSeconds > 0 ? movementTime / travelTimeSeconds : 1;
+                    const easedProgress = this.easeInOutQuad(movementProgress);
+
+                    const currentX = startX + moveX * easedProgress;
+                    const currentZ = startZ + moveZ * easedProgress;
+                    movementPath.push(new Vector3(currentX, 0, currentZ));
+                } else {
+                    // Already arrived, waiting at target
+                    movementPath.push(targetPosition.clone());
+                }
+            }
+        }
+
+        const arrivalTime = config.reactionDelay + travelTimeSeconds;
+
+        return {
+            startPosition,
+            targetPosition,
+            movementPath,
+            arrivalTime,
+            canReach
+        };
+    }
+
+    /**
+     * Easing function for smooth animation
+     */
+    private static easeInOutQuad(t: number): number {
+        return t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
     }
 }

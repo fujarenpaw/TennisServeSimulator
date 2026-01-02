@@ -20,9 +20,7 @@ export const ControlPanel: React.FC<Props> = ({ config, onConfigChange, onPlayAn
     };
 
     const handleChange = (key: keyof ServeConfig, value: number | string | boolean) => {
-        // Direct update first
-        const newConfig = { ...config, [key]: value } as ServeConfig;
-
+        // Only use optimizeServe when user drags target position
         if (key === 'targetX' || key === 'targetZ') {
             // Target changed -> Optimize Speed/Angle
             const targetX = key === 'targetX' ? value as number : config.targetX;
@@ -36,29 +34,9 @@ export const ControlPanel: React.FC<Props> = ({ config, onConfigChange, onPlayAn
                 trajectoryPeakHeight: optimized.trajectoryPeakHeight,
                 peakPosition: optimized.peakPosition
             });
-        } else if (key === 'serveSpeed' || key === 'trajectoryPeakHeight' || key === 'peakPosition' || key === 'serverPositionX') {
-            // Physics changed -> Update TargetX/Z
-            // We need to recalculate where it lands.
-            const trajectory = PhysicsEngine.calculateTrajectory(newConfig);
-
-            // Only update target if it's a valid bounce
-            if (trajectory.bouncePoint) {
-                updateConfig({
-                    [key]: value,
-                    targetX: trajectory.targetX, // This is the actual landing X
-                    targetZ: trajectory.bouncePoint.z // Actual landing Z (relative to net? No, global Z)
-                    // Wait, config.targetZ is "Depth".
-                    // PhysicsEngine returns bouncePoint.z.
-                    // If my slider is "Depth", is it distance from Net?
-                    // In UI: "0.5m to 6.4m" (Net to Service Line).
-                    // So targetZ should be positive Z.
-                    // trajectory.bouncePoint.z is the Z coordinate.
-                });
-            } else {
-                updateConfig({ [key]: value });
-            }
-        }
-        else {
+        } else {
+            // For all other parameters, just update directly
+            // The trajectory will be recalculated automatically in ServeScene
             updateConfig({ [key]: value });
         }
     };
@@ -209,6 +187,41 @@ export const ControlPanel: React.FC<Props> = ({ config, onConfigChange, onPlayAn
                             step="0.05"
                             value={config.serverHeight}
                             onChange={(e) => handleChange('serverHeight', Number(e.target.value))}
+                            style={{ width: '100%' }}
+                        />
+                    </div>
+                </fieldset>
+
+                {/* === Receiver Settings === */}
+                <fieldset style={{ border: '1px solid #ddd', padding: '10px', marginBottom: '15px', borderRadius: '5px' }}>
+                    <legend style={{ fontWeight: 'bold' }}>Receiver Settings</legend>
+
+                    <div style={{ marginBottom: '10px' }}>
+                        <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold', fontSize: '14px' }}>
+                            移動速度: {config.receiverSpeed.toFixed(1)} m/s
+                        </label>
+                        <input
+                            type="range"
+                            min="2.0"
+                            max="8.0"
+                            step="0.1"
+                            value={config.receiverSpeed}
+                            onChange={(e) => handleChange('receiverSpeed', Number(e.target.value))}
+                            style={{ width: '100%' }}
+                        />
+                    </div>
+
+                    <div>
+                        <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold', fontSize: '14px' }}>
+                            反応時間: {config.reactionDelay.toFixed(2)} 秒
+                        </label>
+                        <input
+                            type="range"
+                            min="0.1"
+                            max="0.6"
+                            step="0.05"
+                            value={config.reactionDelay}
+                            onChange={(e) => handleChange('reactionDelay', Number(e.target.value))}
                             style={{ width: '100%' }}
                         />
                     </div>

@@ -6,6 +6,7 @@ import { SceneController } from '../../graphics/SceneController';
 import { CourtVisualizer } from '../../graphics/CourtVisualizer';
 import { TrajectoryVisualizer } from '../../graphics/TrajectoryVisualizer';
 import { BallVisualizer } from '../../graphics/BallVisualizer';
+import { ReceiverVisualizer } from '../../graphics/ReceiverVisualizer';
 import { PhysicsEngine } from '../../core/PhysicsEngine';
 import { COURT_CONSTANTS } from '../../core/CourtConstants';
 import type { ServeConfig, AnalysisResult } from '../../types';
@@ -18,6 +19,7 @@ const ServeScene: React.FC = () => {
     const courtVisualizerRef = useRef<CourtVisualizer | null>(null);
     const trajectoryVisualizerRef = useRef<TrajectoryVisualizer | null>(null);
     const ballVisualizerRef = useRef<BallVisualizer | null>(null);
+    const receiverVisualizerRef = useRef<ReceiverVisualizer | null>(null);
     const controlsRef = useRef<OrbitControls | null>(null);
 
     const isDraggingRef = useRef(false);
@@ -32,7 +34,8 @@ const ServeScene: React.FC = () => {
         bounceVelocityRetention: 0.7,
         reactionDelay: 0.3,
         serverPositionX: 1.5,
-        showDimensions: false
+        showDimensions: false,
+        receiverSpeed: 5.0  // Default receiver speed: 5 m/s
     });
 
     const [results, setResults] = useState<AnalysisResult | null>(null);
@@ -52,6 +55,7 @@ const ServeScene: React.FC = () => {
         const court = new CourtVisualizer();
         const trajectory = new TrajectoryVisualizer(controller.scene);
         const ball = new BallVisualizer(controller.scene);
+        const receiver = new ReceiverVisualizer(controller.scene);
 
         court.addToScene(controller.scene);
 
@@ -59,12 +63,17 @@ const ServeScene: React.FC = () => {
         const controls = new OrbitControls(controller.camera, controller.renderer.domElement);
         controls.enableDamping = true;
         controls.dampingFactor = 0.05;
+        // Limit camera rotation to prevent viewing from behind the court
+        controls.minAzimuthAngle = 0;
+        controls.maxAzimuthAngle = Math.PI; // 180 degrees (horizontal rotation)
+        controls.maxPolarAngle = Math.PI / 2; // Limit vertical angle to prevent seeing court back
         controller.addUpdatable(() => controls.update());
 
         sceneControllerRef.current = controller;
         courtVisualizerRef.current = court;
         trajectoryVisualizerRef.current = trajectory;
         ballVisualizerRef.current = ball;
+        receiverVisualizerRef.current = receiver;
         controlsRef.current = controls;
 
         // Interaction Setup
@@ -172,26 +181,42 @@ const ServeScene: React.FC = () => {
             ballVisualizerRef.current.setPosition(serverPos);
         }
 
+        // Update receiver markers
+        if (receiverVisualizerRef.current) {
+            receiverVisualizerRef.current.updateMarkers(receiverPos, targetPos);
+        }
+
     }, [config, isAnimating]);
 
     const handlePlayAnimation = () => {
-        if (isAnimating || !sceneControllerRef.current || !ballVisualizerRef.current) return;
+        if (isAnimating || !sceneControllerRef.current || !ballVisualizerRef.current || !receiverVisualizerRef.current) return;
 
         const trajectoryData = PhysicsEngine.calculateTrajectory(config);
+        const analysis = PhysicsEngine.calculateReceiverAnalysis(trajectoryData, config);
         const points = trajectoryData.points;
         let index = 0;
 
         setIsAnimating(true);
 
         const updateBall = () => {
-            if (index < points.length && ballVisualizerRef.current) {
+            if (index < points.length && ballVisualizerRef.current && receiverVisualizerRef.current) {
+                // Update ball position
                 ballVisualizerRef.current.setPosition(points[index]);
+
+                // Update receiver position
+                const dt = 0.01;
+                const progress = (index * dt) / analysis.receiveTime;
+                receiverVisualizerRef.current.updateReceiverAnimation(analysis.receiverMovement, progress);
+
                 index++;
             } else {
                 // End animation
                 setIsAnimating(false);
                 if (ballVisualizerRef.current) {
                     ballVisualizerRef.current.setPosition(new THREE.Vector3(config.serverPositionX, 2.8, -COURT_CONSTANTS.length / 2));
+                }
+                if (receiverVisualizerRef.current) {
+                    receiverVisualizerRef.current.reset(analysis.receiverMovement);
                 }
                 if (sceneControllerRef.current) {
                     sceneControllerRef.current.removeUpdatable(updateBall);

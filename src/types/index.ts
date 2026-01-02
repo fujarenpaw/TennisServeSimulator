@@ -11,6 +11,7 @@ export interface ServeConfig {
   reactionDelay: number;          // seconds
   serverPositionX: number;        // m
   showDimensions: boolean;
+  receiverSpeed: number;          // m/s (receiver movement speed)
 }
 
 export interface TrajectoryData {
@@ -24,6 +25,14 @@ export interface TrajectoryData {
   bounceVelocityX: number;
   timeToFirstBounce: number;
   targetX: number;
+}
+
+export interface ReceiverMovement {
+  startPosition: Vector3;
+  targetPosition: Vector3;
+  movementPath: Vector3[];      // Animation path
+  arrivalTime: number;          // Time to reach target position
+  canReach: boolean;            // Whether receiver can reach the ball
 }
 
 export interface AnalysisResult {
@@ -40,4 +49,6 @@ export interface AnalysisResult {
   bounceDistanceX: number;
   bounceVelocityY: number; // referring to Z velocity
   bounceVelocityX: number;
+  timingBuffer: number;          // Buffer time between arrival and ball contact (seconds)
+  receiverMovement: ReceiverMovement;
 }
