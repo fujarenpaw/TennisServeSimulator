@@ -46,25 +46,37 @@ export class ReceiverVisualizer {
         );
 
         // Animation logic
-        // If still moving significantly, use walk animation
+        // If still moving significantly, use shuffle or walk animation
         const nextPos = movement.movementPath[Math.min(pathIndex + 1, movement.movementPath.length - 1)];
-        const dist = new THREE.Vector2(nextPos.x - position.x, nextPos.z - position.z).length();
+        const dx = nextPos.x - position.x;
+        const dz = nextPos.z - position.z;
+        const dist = Math.sqrt(dx * dx + dz * dz);
 
-        if (progress < 0.8 && dist > 0.01) {
-            this.character.updateAnimation('WALK', progress * 10); // Speed up walk cycle
+        if (progress < 0.8 && dist > 0.005) {
+            // If movement is predominantly lateral, use shuffle
+            if (Math.abs(dx) > Math.abs(dz)) {
+                this.character.updateAnimation('SHUFFLE', progress * 5);
+            } else {
+                this.character.updateAnimation('WALK', progress * 8);
+            }
         } else if (progress >= 0.8) {
             // Near impact, decide forehand, backhand, or volley
-            const isHigh = ballPosition.y > 1.2;
-            const isForehand = movement.targetPosition.x > position.x;
+            const isHigh = ballPosition.y > 1.4;
+            // Face the ball
+            const side = movement.targetPosition.x > position.x ? 1 : -1;
             const actionProgress = (progress - 0.8) / 0.2;
 
             if (isHigh) {
                 this.character.updateAnimation('VOLLEY', actionProgress);
             } else {
-                this.character.updateAnimation(isForehand ? 'RETURN_FORE' : 'RETURN_BACK', actionProgress);
+                // Simplified side detection: if ball is to the RIGHT of character's local coordinates
+                // Since character is facing Z+ (opponent), X+ is Left, X- is Right? 
+                // Let's assume standard: ball X > character X => Forehand (for right hander)
+                this.character.updateAnimation(side > 0 ? 'RETURN_BACK' : 'RETURN_FORE', actionProgress);
             }
         } else {
-            this.character.updateAnimation('IDLE', progress);
+            // Not moving much, preparation state
+            this.character.updateAnimation('READY', progress);
         }
     }
 

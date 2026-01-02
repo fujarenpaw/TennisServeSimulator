@@ -234,45 +234,88 @@ const ServeScene: React.FC = () => {
         const trajectoryData = PhysicsEngine.calculateTrajectory(config);
         const analysis = PhysicsEngine.calculateReceiverAnalysis(trajectoryData, config);
         const points = trajectoryData.points;
-        let index = 0;
+        let frameCount = 0;
 
         setIsAnimating(true);
 
+        const finishAnimation = () => {
+            setIsAnimating(false);
+            if (ballVisualizerRef.current) {
+                ballVisualizerRef.current.setPosition(new THREE.Vector3(config.serverPositionX, config.serverHeight, -COURT_CONSTANTS.length / 2));
+            }
+            if (receiverVisualizerRef.current) {
+                receiverVisualizerRef.current.reset(analysis.receiverMovement);
+            }
+            if (serverVisualizerRef.current) {
+                serverVisualizerRef.current.update(config.serverPositionX, config.serverHeight, 0, false);
+            }
+            if (sceneControllerRef.current) {
+                sceneControllerRef.current.removeUpdatable(updateFrame);
+            }
+        };
+
         const updateFrame = () => {
-            if (index < points.length && ballVisualizerRef.current && receiverVisualizerRef.current && serverVisualizerRef.current) {
-                const currentBallPos = points[index];
+            const dt = 0.01;
+            const currentTime = frameCount * dt;
+            const isUnderhand = config.serverHeight < 2.0;
+            const PREP_TIME = isUnderhand ? 0.2 : 0.6; // Underhand is much faster, no toss
 
-                // Update ball position
-                ballVisualizerRef.current.setPosition(currentBallPos);
+            if (serverVisualizerRef.current && ballVisualizerRef.current && receiverVisualizerRef.current) {
+                // Determine server progress. Impact is at 0.5.
+                let serverProgress = 0;
+                if (currentTime < PREP_TIME) {
+                    serverProgress = (currentTime / PREP_TIME) * 0.5;
+                } else {
+                    // Post-impact follow through (0.5 to 1.0)
+                    // Let's make follow through take about 0.5s regardless of prep time
+                    serverProgress = 0.5 + Math.min(0.5, (currentTime - PREP_TIME) / 0.5);
+                }
 
-                // Update animation progress (0 to 1)
-                const dt = 0.01;
-                const time = index * dt;
-                const progress = time / analysis.receiveTime;
-
-                // Server animation (primarily during first part of flight)
-                const serverProgress = Math.min(1.0, time / 1.0); // 1.0s for serve motion
                 serverVisualizerRef.current.update(config.serverPositionX, config.serverHeight, serverProgress, true);
 
-                // Update receiver position and animation
-                receiverVisualizerRef.current.updateReceiverAnimation(analysis.receiverMovement, progress, currentBallPos);
+                if (currentTime < PREP_TIME) {
+                    // Prep Phase
+                    const serverX = config.serverPositionX;
+                    const serverHeight = config.serverHeight;
+                    const startZ = -COURT_CONSTANTS.length / 2;
+                    let ballPos: THREE.Vector3;
 
-                index++;
+                    if (!isUnderhand) {
+                        // Toss Phase (Standard only)
+                        const tossP = currentTime / PREP_TIME;
+                        const tossPeak = Math.max(serverHeight + 1.2, 3.8);
+                        let ballY = 0;
+                        if (tossP < 0.5) {
+                            ballY = 1.0 + (tossPeak - 1.0) * (tossP / 0.5);
+                        } else {
+                            ballY = tossPeak - (tossPeak - serverHeight) * ((tossP - 0.5) / 0.5);
+                        }
+                        ballPos = new THREE.Vector3(serverX - 0.2, ballY, startZ);
+                    } else {
+                        // Underhand: Ball held at hip height (approx 1.0m) until hit
+                        ballPos = new THREE.Vector3(serverX + 0.1, 1.0, startZ);
+                    }
+
+                    ballVisualizerRef.current.setPosition(ballPos);
+                    receiverVisualizerRef.current.updateReceiverAnimation(analysis.receiverMovement, 0, ballPos);
+                } else {
+                    // Flight Phase
+                    const flightTime = currentTime - PREP_TIME;
+                    const flightIndex = Math.floor(flightTime / dt);
+
+                    if (flightIndex < points.length) {
+                        const currentBallPos = points[flightIndex];
+                        ballVisualizerRef.current.setPosition(currentBallPos);
+
+                        const progress = flightTime / analysis.receiveTime;
+                        receiverVisualizerRef.current.updateReceiverAnimation(analysis.receiverMovement, progress, currentBallPos);
+                    } else {
+                        finishAnimation();
+                    }
+                }
+                frameCount++;
             } else {
-                // End animation
-                setIsAnimating(false);
-                if (ballVisualizerRef.current) {
-                    ballVisualizerRef.current.setPosition(new THREE.Vector3(config.serverPositionX, config.serverHeight, -COURT_CONSTANTS.length / 2));
-                }
-                if (receiverVisualizerRef.current) {
-                    receiverVisualizerRef.current.reset(analysis.receiverMovement);
-                }
-                if (serverVisualizerRef.current) {
-                    serverVisualizerRef.current.update(config.serverPositionX, config.serverHeight, 0, false);
-                }
-                if (sceneControllerRef.current) {
-                    sceneControllerRef.current.removeUpdatable(updateFrame);
-                }
+                finishAnimation();
             }
         };
 
