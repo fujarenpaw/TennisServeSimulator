@@ -1,8 +1,9 @@
 import * as THREE from 'three';
 import type { ReceiverMovement } from '../types';
+import { HumanoidCharacter } from './HumanoidCharacter';
 
 export class ReceiverVisualizer {
-    private receiverMesh: THREE.Mesh;
+    private character: HumanoidCharacter;
     private targetMesh: THREE.Mesh;
     private pathLine: THREE.Line | null = null;
     private scene: THREE.Scene;
@@ -10,12 +11,9 @@ export class ReceiverVisualizer {
     constructor(scene: THREE.Scene) {
         this.scene = scene;
 
-        // Create receiver mesh (blue sphere)
-        const receiverGeometry = new THREE.SphereGeometry(0.3, 16, 16);
-        const receiverMaterial = new THREE.MeshStandardMaterial({ color: 0x0000ff });
-        this.receiverMesh = new THREE.Mesh(receiverGeometry, receiverMaterial);
-        this.receiverMesh.position.y = 0.3; // Slightly above ground
-        scene.add(this.receiverMesh);
+        // Create humanoid character for receiver
+        this.character = new HumanoidCharacter(0xffff00); // Yellow/Gold clothes for receiver
+        scene.add(this.character.group);
 
         // Create target mesh (semi-transparent green sphere)
         const targetGeometry = new THREE.SphereGeometry(0.2, 16, 16);
@@ -32,7 +30,7 @@ export class ReceiverVisualizer {
     /**
      * Update receiver position during animation
      */
-    updateReceiverAnimation(movement: ReceiverMovement, progress: number): void {
+    updateReceiverAnimation(movement: ReceiverMovement, progress: number, ballPosition: THREE.Vector3): void {
         // progress is 0 to 1 representing animation progress
         const pathIndex = Math.min(
             Math.floor(progress * movement.movementPath.length),
@@ -40,12 +38,34 @@ export class ReceiverVisualizer {
         );
 
         const position = movement.movementPath[pathIndex];
-        this.receiverMesh.position.set(position.x, 0.3, position.z);
+        this.character.setPosition(position.x, 0, position.z);
         this.targetMesh.position.set(
             movement.targetPosition.x,
             0.2,
             movement.targetPosition.z
         );
+
+        // Animation logic
+        // If still moving significantly, use walk animation
+        const nextPos = movement.movementPath[Math.min(pathIndex + 1, movement.movementPath.length - 1)];
+        const dist = new THREE.Vector2(nextPos.x - position.x, nextPos.z - position.z).length();
+
+        if (progress < 0.8 && dist > 0.01) {
+            this.character.updateAnimation('WALK', progress * 10); // Speed up walk cycle
+        } else if (progress >= 0.8) {
+            // Near impact, decide forehand, backhand, or volley
+            const isHigh = ballPosition.y > 1.2;
+            const isForehand = movement.targetPosition.x > position.x;
+            const actionProgress = (progress - 0.8) / 0.2;
+
+            if (isHigh) {
+                this.character.updateAnimation('VOLLEY', actionProgress);
+            } else {
+                this.character.updateAnimation(isForehand ? 'RETURN_FORE' : 'RETURN_BACK', actionProgress);
+            }
+        } else {
+            this.character.updateAnimation('IDLE', progress);
+        }
     }
 
     /**
@@ -74,11 +94,12 @@ export class ReceiverVisualizer {
      * Reset receiver to initial position
      */
     reset(movement: ReceiverMovement): void {
-        this.receiverMesh.position.set(
+        this.character.setPosition(
             movement.startPosition.x,
-            0.3,
+            0,
             movement.startPosition.z
         );
+        this.character.updateAnimation('IDLE', 0);
         this.targetMesh.position.set(
             movement.targetPosition.x,
             0.2,
@@ -90,7 +111,8 @@ export class ReceiverVisualizer {
      * Update marker positions without animation
      */
     updateMarkers(receiverStart: THREE.Vector3, receiverTarget: THREE.Vector3): void {
-        this.receiverMesh.position.set(receiverStart.x, 0.3, receiverStart.z);
+        this.character.setPosition(receiverStart.x, 0, receiverStart.z);
+        this.character.updateAnimation('IDLE', 0);
         this.targetMesh.position.set(receiverTarget.x, 0.2, receiverTarget.z);
     }
 
@@ -98,10 +120,15 @@ export class ReceiverVisualizer {
      * Dispose of resources
      */
     dispose(): void {
-        this.scene.remove(this.receiverMesh);
+        this.scene.remove(this.character.group);
         this.scene.remove(this.targetMesh);
         if (this.pathLine) {
             this.scene.remove(this.pathLine);
         }
+    }
+
+    // To maintain compatibility with existing Raycaster logic if any
+    get receiverMesh() {
+        return this.character.group;
     }
 }
