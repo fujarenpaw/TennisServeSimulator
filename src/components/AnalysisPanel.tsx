@@ -10,11 +10,11 @@ export const AnalysisPanel: React.FC<Props> = ({ results }) => {
 
     return (
         <div style={{
-            marginTop: '20px',
             padding: '15px',
             backgroundColor: 'white',
             borderRadius: '5px',
-            border: '1px solid #ddd'
+            border: '1px solid #ddd',
+            boxShadow: '0 2px 4px rgba(0,0,0,0.05)'
         }}>
             <h3 style={{ margin: '0 0 10px 0' }}>分析結果</h3>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', fontSize: '14px' }}>

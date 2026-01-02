@@ -260,16 +260,23 @@ const ServeScene: React.FC = () => {
 
     return (
         <div style={{ width: '100%', height: '100vh', display: 'flex', flexDirection: 'column' }}>
-            <div ref={containerRef} style={{ flex: 1, position: 'relative' }} />
+            {/* 上部エリア: シミュレーター(2/3) + 分析結果(1/3) */}
+            <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
+                <div ref={containerRef} style={{ flex: 2, position: 'relative', borderRight: '1px solid #ddd' }} />
 
-            <div style={{ maxHeight: '400px', backgroundColor: '#f5f5f5', overflowY: 'auto' }}>
+                <div style={{ flex: 1, backgroundColor: '#f9f9f9', overflowY: 'auto', padding: '10px' }}>
+                    <AnalysisPanel results={results} />
+                </div>
+            </div>
+
+            {/* 下部エリア: コントロールパネル */}
+            <div style={{ height: '300px', backgroundColor: '#f5f5f5', borderTop: '2px solid #ccc', overflowY: 'auto' }}>
                 <ControlPanel
                     config={config}
                     onConfigChange={setConfig}
                     onPlayAnimation={handlePlayAnimation}
                     isAnimating={isAnimating}
                 />
-                <AnalysisPanel results={results} />
             </div>
         </div>
     );
